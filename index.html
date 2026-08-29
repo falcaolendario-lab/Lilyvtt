@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0b1118" />
+    <meta
+      name="description"
+      content="Beta de um tabletop web para RPG com cenas, tokens, permissões, luz e sequências narrativas."
+    />
+    <title>Tabletop RPG — Beta</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body data-role="gm">
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-lockup" aria-label="Tabletop RPG beta">
+          <div class="brand-mark">T</div>
+          <div>
+            <div class="eyebrow">TABLETOP / BETA</div>
+            <div class="brand-name">shared table</div>
+          </div>
+        </div>
+
+        <div class="room-identity">
+          <span class="eyebrow">ROOM</span>
+          <strong id="roomName">Mesa sem título</strong>
+          <button class="icon-button" id="renameRoom" title="Renomear sala" aria-label="Renomear sala">···</button>
+        </div>
+
+        <div class="top-actions">
+          <span class="save-indicator" id="saveIndicator"><span class="status-dot"></span> salvo localmente</span>
+          <button class="quiet-button gm-only" id="shareRoom">Compartilhar player</button>
+          <div class="role-switch" aria-label="Escolher modo de visualização">
+            <button class="role-button active" id="roleGm" data-role-choice="gm">Mestre</button>
+            <button class="role-button" id="rolePlayer" data-role-choice="player">Player</button>
+          </div>
+        </div>
+      </header>
+
+      <div class="beta-strip" id="betaStrip">
+        <span class="beta-pulse"></span>
+        <span><strong>Beta local.</strong> O link de player demonstra a separação de permissões nesta versão; a sincronização entre dispositivos entra na camada de sala online.</span>
+        <button class="strip-close" id="closeBetaStrip" aria-label="Fechar aviso">×</button>
+      </div>
+
+      <main class="workspace">
+        <aside class="left-sidebar gm-only" id="gmSidebar">
+          <div class="sidebar-topline">
+            <div>
+              <div class="eyebrow">CONTROL ROOM</div>
+              <h1>Preparar mesa</h1>
+            </div>
+            <span class="live-pill"><span></span> local</span>
+          </div>
+
+          <nav class="side-tabs" aria-label="Ferramentas do Mestre">
+            <button class="side-tab active" data-panel="assetsPanel">Biblioteca</button>
+            <button class="side-tab" data-panel="scenePanel">Cena</button>
+            <button class="side-tab" data-panel="accessPanel">Acesso</button>
+          </nav>
+
+          <section class="side-panel active" id="assetsPanel">
+            <div class="panel-heading">
+              <div>
+                <div class="eyebrow">ASSETS</div>
+                <h2>Biblioteca do Mestre</h2>
+              </div>
+              <span class="count-badge" id="assetCount">0</span>
+            </div>
+
+            <div class="upload-block">
+              <label class="upload-row" for="mapInput">
+                <span class="upload-icon">＋</span>
+                <span>
+                  <strong>Adicionar mapa</strong>
+                  <small>PNG, JPG ou WebP</small>
+                </span>
+              </label>
+              <input id="mapInput" type="file" accept="image/png,image/jpeg,image/webp" hidden />
+            </div>
+
+            <div class="section-label"><span>MAPAS SALVOS</span><span id="mapCount">0</span></div>
+            <div class="asset-list compact-list" id="mapList"></div>
+
+            <div class="section-label token-label"><span>TOKENS SALVOS</span><span id="tokenCount">0</span></div>
+            <button class="primary-button full-width" id="newToken"><span>＋</span> Novo token</button>
+            <div class="asset-list" id="tokenList"></div>
+
+            <div class="section-label sequence-label"><span>SEQUÊNCIAS</span><span id="sequenceCount">0</span></div>
+            <div class="sequence-note">Crie um hotspot no canvas para adicionar imagens e frases em sequência.</div>
+            <div class="asset-list compact-list" id="sequenceList"></div>
+          </section>
+
+          <section class="side-panel" id="scenePanel">
+            <div class="panel-heading">
+              <div>
+                <div class="eyebrow">SCENE</div>
+                <h2>Configuração da cena</h2>
+              </div>
+            </div>
+            <label class="field-label" for="sceneName">Nome da cena</label>
+            <input class="text-input" id="sceneName" type="text" maxlength="60" />
+            <button class="quiet-button full-width scene-action" id="newScene">＋ Nova cena</button>
+
+            <div class="section-label"><span>VISIBILIDADE</span></div>
+            <label class="switch-row">
+              <span><strong>Iluminação global</strong><small>Players enxergam tudo no campo de visão.</small></span>
+              <input type="checkbox" id="globalIllumination" />
+              <span class="switch-ui"></span>
+            </label>
+            <label class="switch-row">
+              <span><strong>Máscara de visão</strong><small>Usa luz e barreiras em tempo real.</small></span>
+              <input type="checkbox" id="visionMask" checked />
+              <span class="switch-ui"></span>
+            </label>
+
+            <div class="section-label"><span>FERRAMENTAS</span></div>
+            <div class="tool-explainer">
+              <div><span class="tool-key">W</span><span>Barreira</span></div>
+              <div><span class="tool-key">L</span><span>Luz</span></div>
+              <div><span class="tool-key">H</span><span>Hotspot</span></div>
+            </div>
+            <p class="muted-copy">As barreiras ficam invisíveis para os players e controlam movimento, visão e luz de forma independente.</p>
+          </section>
+
+          <section class="side-panel" id="accessPanel">
+            <div class="panel-heading">
+              <div>
+                <div class="eyebrow">ROOM ACCESS</div>
+                <h2>Permissões do Player</h2>
+              </div>
+            </div>
+            <p class="muted-copy">No beta, estas permissões são aplicadas no modo Player local. Na sala online, serão validadas pelo servidor.</p>
+
+            <label class="switch-row permission-row">
+              <span><strong>Mover o próprio token</strong><small>O Player não move tokens de outras pessoas.</small></span>
+              <input type="checkbox" data-permission="moveOwnToken" checked />
+              <span class="switch-ui"></span>
+            </label>
+            <label class="switch-row permission-row">
+              <span><strong>Trocar estados do token</strong><small>Permite usar as teclas 1–9.</small></span>
+              <input type="checkbox" data-permission="changeOwnImage" checked />
+              <span class="switch-ui"></span>
+            </label>
+            <label class="switch-row permission-row">
+              <span><strong>Interagir com hotspots</strong><small>Permite abrir cenas narrativas.</small></span>
+              <input type="checkbox" data-permission="interactSequences" checked />
+              <span class="switch-ui"></span>
+            </label>
+            <label class="switch-row permission-row">
+              <span><strong>Pings e medição</strong><small>Ferramentas sociais do canvas.</small></span>
+              <input type="checkbox" data-permission="pingAndMeasure" checked />
+              <span class="switch-ui"></span>
+            </label>
+          </section>
+        </aside>
+
+        <section class="stage-column">
+          <div class="stage-toolbar">
+            <div class="toolbar-group gm-only" id="gmToolbar">
+              <button class="tool-button active" data-tool="select" title="Selecionar (V)"><span>↖</span><em>Selecionar</em></button>
+              <button class="tool-button" data-tool="wall" title="Desenhar barreira (W)"><span>╱</span><em>Barreira</em></button>
+              <button class="tool-button" data-tool="light" title="Adicionar luz (L)"><span>◌</span><em>Luz</em></button>
+              <button class="tool-button" data-tool="hotspot" title="Adicionar hotspot (H)"><span>✦</span><em>Hotspot</em></button>
+            </div>
+            <div class="canvas-context">
+              <span class="scene-chip" id="sceneChip">CENA INICIAL</span>
+              <span class="tool-status" id="toolStatus">Clique em um token para inspecionar</span>
+            </div>
+            <div class="toolbar-group right-tools">
+              <button class="tool-button subtle" id="resetView" title="Recentrar mapa"><span>⌂</span><em>Centro</em></button>
+              <button class="tool-button subtle" id="clearSelection" title="Limpar seleção"><span>×</span><em>Limpar</em></button>
+            </div>
+          </div>
+
+          <div class="stage-frame">
+            <div class="stage" id="stage" tabindex="0" aria-label="Canvas da cena">
+              <div class="map-placeholder" id="mapPlaceholder">
+                <div class="placeholder-grid"></div>
+                <div class="placeholder-copy">
+                  <span class="placeholder-mark">＋</span>
+                  <strong>Adicione um mapa à cena</strong>
+                  <small>Use a Biblioteca do Mestre para importar uma imagem.</small>
+                </div>
+              </div>
+              <img id="mapImage" class="map-image" alt="Mapa da cena" hidden />
+              <div class="scene-vignette"></div>
+              <svg id="wallsLayer" class="walls-layer" viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true"></svg>
+              <canvas id="lightingCanvas" class="lighting-canvas" aria-hidden="true"></canvas>
+              <div id="lightsLayer" class="lights-layer" aria-hidden="true"></div>
+              <div id="hotspotsLayer" class="hotspots-layer"></div>
+              <div id="tokensLayer" class="tokens-layer"></div>
+              <div class="wall-draft" id="wallDraft" hidden></div>
+              <div class="stage-empty-hint" id="stageHint">Arraste um token da Biblioteca ou adicione um mapa para começar.</div>
+            </div>
+          </div>
+
+          <div class="stage-footer">
+            <div class="selection-summary" id="selectionSummary">
+              <span class="selection-avatar" id="selectionAvatar">—</span>
+              <div><strong id="selectionName">Nenhum token selecionado</strong><small id="selectionDetail">O canvas está pronto.</small></div>
+            </div>
+            <div class="hotkey-strip" id="hotkeyStrip">
+              <span class="eyebrow">ESTADOS</span>
+              <span class="hotkey-placeholder">Selecione um token para usar 1–9</span>
+            </div>
+          </div>
+        </section>
+
+        <aside class="right-inspector" id="inspector">
+          <div class="inspector-topline">
+            <div>
+              <div class="eyebrow">INSPECTOR</div>
+              <h2 id="inspectorTitle">Sala</h2>
+            </div>
+            <span class="inspector-signal"></span>
+          </div>
+          <div id="inspectorContent" class="inspector-content"></div>
+        </aside>
+      </main>
+    </div>
+
+    <dialog class="modal" id="tokenDialog">
+      <form method="dialog" id="tokenForm" class="modal-card">
+        <div class="modal-header">
+          <div><div class="eyebrow">TOKEN LIBRARY</div><h2 id="tokenDialogTitle">Novo token</h2></div>
+          <button class="icon-button modal-close" value="cancel" aria-label="Fechar">×</button>
+        </div>
+        <label class="field-label" for="tokenName">Nome</label>
+        <input class="text-input" id="tokenName" type="text" maxlength="60" placeholder="Ex.: Iota, Guarda, Monstro" required />
+        <label class="field-label" for="tokenOwner">Dono padrão</label>
+        <select class="text-input" id="tokenOwner">
+          <option value="player-1">Player 1</option>
+          <option value="gm">Somente Mestre</option>
+        </select>
+        <label class="field-label" for="tokenImages">Imagens/estados</label>
+        <input class="file-input" id="tokenImages" type="file" accept="image/png,image/jpeg,image/webp" multiple />
+        <small class="form-help">A ordem dos arquivos vira as teclas 1, 2, 3… Você pode adicionar novas imagens ao token salvo.</small>
+        <div class="frame-preview" id="framePreview"></div>
+        <label class="check-row" id="replaceImagesRow" hidden><input type="checkbox" id="replaceImages" /> Substituir estados atuais</label>
+        <div class="modal-actions">
+          <button class="quiet-button" value="cancel">Cancelar</button>
+          <button class="primary-button" id="saveToken" value="default">Salvar token</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="modal" id="sequenceDialog">
+      <form method="dialog" id="sequenceForm" class="modal-card">
+        <div class="modal-header">
+          <div><div class="eyebrow">NARRATIVE HOTSPOT</div><h2>Nova sequência</h2></div>
+          <button class="icon-button modal-close" value="cancel" aria-label="Fechar">×</button>
+        </div>
+        <label class="field-label" for="sequenceName">Nome da sequência</label>
+        <input class="text-input" id="sequenceName" type="text" maxlength="60" placeholder="Ex.: A porta começa a respirar" required />
+        <label class="field-label" for="sequenceSpeaker">Nome exibido</label>
+        <input class="text-input" id="sequenceSpeaker" type="text" maxlength="40" placeholder="Narrador" />
+        <label class="field-label" for="sequenceLines">Frases — uma por linha</label>
+        <textarea class="text-input text-area" id="sequenceLines" rows="4" placeholder="O corredor está vazio.\nEntão, alguma coisa pisca no escuro."></textarea>
+        <label class="field-label" for="sequenceImages">Imagens dos frames</label>
+        <input class="file-input" id="sequenceImages" type="file" accept="image/png,image/jpeg,image/webp" multiple />
+        <small class="form-help">A primeira imagem acompanha a primeira frase, a segunda acompanha a segunda e assim por diante.</small>
+        <div class="modal-actions">
+          <button class="quiet-button" value="cancel">Cancelar</button>
+          <button class="primary-button" value="default">Criar hotspot</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="modal sequence-player" id="sequencePlayerDialog">
+      <div class="sequence-player-card">
+        <button class="sequence-dismiss icon-button" id="closeSequence" aria-label="Fechar sequência">×</button>
+        <div class="sequence-media" id="sequenceMedia"><div class="sequence-media-placeholder">✦</div></div>
+        <div class="sequence-copy">
+          <div class="eyebrow" id="sequenceCounter">FRAME 01 / 01</div>
+          <div class="sequence-speaker" id="sequenceSpeakerView">Narrador</div>
+          <p id="sequenceText">A cena começa.</p>
+          <div class="sequence-controls">
+            <button class="quiet-button" id="previousFrame">Anterior</button>
+            <button class="primary-button" id="nextFrame">Próximo <span>→</span></button>
+          </div>
+        </div>
+      </div>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="app.js" defer></script>
+  </body>
+</html>
