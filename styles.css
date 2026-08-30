@@ -174,10 +174,6 @@ h1, h2, p { margin: 0; }
 .light-preset { display: inline-flex; align-items: center; gap: 5px; padding: 5px 6px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); background: rgba(255,255,255,.025); font-size: 8px; }
 .light-preset:hover, .light-preset.active { border-color: var(--preset-color, var(--cyan)); color: var(--text); background: rgba(255,255,255,.07); }
 .light-preset-swatch { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: var(--preset-color, var(--amber)); box-shadow: 0 0 8px var(--preset-color, var(--amber)); }
-.analysis-actions { display: grid; gap: 6px; margin-top: 9px; }
-.analysis-actions .quiet-button { padding: 7px 9px; font-size: 9px; text-align: left; }
-.map-analysis-status { display: block; margin-top: 7px; color: var(--faint); font-size: 9px; line-height: 1.4; }
-.analysis-actions button:disabled { opacity: .42; cursor: not-allowed; }
 
 .stage-column { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: #0c1218; }
 .stage-toolbar { min-height: 50px; display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-bottom: 1px solid var(--line); background: rgba(16,22,29,.84); box-shadow: 0 8px 24px rgba(0,0,0,.12); backdrop-filter: blur(12px); }
@@ -217,7 +213,7 @@ h1, h2, p { margin: 0; }
 .walls-layer line { stroke: var(--amber); stroke-width: .006; stroke-linecap: round; stroke-dasharray: .012 .008; opacity: .72; filter: drop-shadow(0 0 5px rgba(244,199,131,.4)); }
 .lighting-canvas { z-index: 6; pointer-events: none; width: 100%; height: 100%; }
 .darkness-layer { z-index: 7; pointer-events: none; }
-.darkness-zone { position: absolute; min-width: 8px; min-height: 8px; border: 1px dashed rgba(185,211,229,.28); border-radius: 5px; background: radial-gradient(circle at 28% 24%, rgba(104,126,145,.05), transparent 34%), repeating-linear-gradient(135deg, rgba(0,0,0,.08) 0 2px, transparent 2px 8px), rgba(2,6,12,.96); opacity: var(--darkness-opacity,.92); pointer-events: auto; cursor: grab; }
+.darkness-zone { position: absolute; min-width: 8px; min-height: 8px; border: 1px dashed rgba(185,211,229,.34); border-radius: 5px; background: radial-gradient(circle at 28% 24%, rgba(104,126,145,.07), transparent 34%), repeating-linear-gradient(135deg, rgba(255,255,255,.035) 0 2px, transparent 2px 8px), linear-gradient(145deg, rgba(1,4,9,.99), rgba(5,9,16,.98)); opacity: var(--darkness-opacity,.92); pointer-events: auto; cursor: grab; }
 .darkness-zone:hover, .darkness-zone.selected { border-color: var(--cyan); box-shadow: inset 0 0 22px rgba(4,7,12,.28), 0 0 0 3px rgba(131,225,220,.12); }
 .darkness-zone:active { cursor: grabbing; }
 .lights-layer { z-index: 8; pointer-events: none; }
@@ -244,6 +240,13 @@ h1, h2, p { margin: 0; }
 .token.attack-target { outline: 2px dashed var(--rose); outline-offset: 5px; box-shadow: 0 0 0 8px rgba(236,141,154,.12); }
 .token-body { width: 100%; height: 100%; display: grid; place-items: center; }
 .token img { width: 100%; height: 100%; border-radius: 0; object-fit: contain; pointer-events: none; }
+.token-transform-ui { position: absolute; inset: -7px; z-index: 8; pointer-events: none; }
+.token-resize-handle { position: absolute; width: 10px; height: 10px; border: 1px solid var(--cyan); border-radius: 2px; background: #0b1519; box-shadow: 0 0 0 2px rgba(131,225,220,.12), 0 2px 7px rgba(0,0,0,.5); pointer-events: auto; }
+.token-resize-handle:hover { background: var(--cyan); box-shadow: 0 0 0 3px rgba(131,225,220,.18), 0 0 12px rgba(131,225,220,.6); }
+.token-resize-nw { left: 0; top: 0; cursor: nwse-resize; }
+.token-resize-ne { right: 0; top: 0; cursor: nesw-resize; }
+.token-resize-sw { left: 0; bottom: 0; cursor: nesw-resize; }
+.token-resize-se { right: 0; bottom: 0; cursor: nwse-resize; }
 .token-fallback { width: 100%; height: 100%; display: grid; place-items: center; border: 1px solid rgba(131,225,220,.45); border-radius: 5px; background: linear-gradient(145deg, #314b56, #17242c); color: #e6fbf7; font-size: clamp(12px, 2vw, 20px); font-weight: 850; }
 .token-impact-active .token-body { animation: token-body-hit .72s cubic-bezier(.2,.8,.35,1) both; }
 .token-impact-effect { position: absolute; inset: -32%; z-index: 4; display: grid; place-items: center; pointer-events: none; }
