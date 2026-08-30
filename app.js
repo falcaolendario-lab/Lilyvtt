@@ -1,7 +1,7 @@
 "use strict";
 
 /*
- * Tabletop RPG — beta local
+ * LilyVTT — beta local + sala online
  *
  * A cena guarda apenas instâncias posicionadas. A biblioteca guarda os assets
  * reutilizáveis. Essa separação é o que permite trocar o mapa sem perder os
@@ -9,6 +9,7 @@
  */
 
 const STORAGE_KEY = "tabletop-rpg-beta-state-v1";
+const ONLINE_CREDENTIALS_KEY = "lilyvtt-online-credentials-v1";
 const STATE_SCHEMA_VERSION = 5;
 const PLAYER_ID = "player-1";
 const DEFAULT_LIGHT_COLOR = "#f4c783";
@@ -34,6 +35,7 @@ const els = {
   body: document.body,
   roomName: $("#roomName"),
   saveIndicator: $("#saveIndicator"),
+  connectionStatus: $("#connectionStatus"),
   betaStrip: $("#betaStrip"),
   roleButtons: $$("[data-role-choice]"),
   sideTabs: $$(".side-tab"),
@@ -108,9 +110,29 @@ const els = {
   toast: $("#toast"),
 };
 
-const launchedAsPlayer = new URLSearchParams(window.location.search).get("mode") === "player";
+const queryParams = new URLSearchParams(window.location.search);
+const launchedAsPlayer = queryParams.get("mode") === "player";
+const requestedRoomId = queryParams.get("room") || "";
+const requestedServerUrl = queryParams.get("server") || "";
+const pageServerUrl = document.querySelector('meta[name="lily-server-url"]')?.content || "";
+const serverHint = requestedServerUrl || window.LILY_SERVER_URL || pageServerUrl;
+const isGithubPages = /\.github\.io$/i.test(window.location.hostname);
+const onlineServerBase = normalizeServerBase(serverHint || (!isGithubPages ? window.location.origin : ""));
 const initialRole = launchedAsPlayer ? "player" : "gm";
 let state = loadState();
+let realtime = {
+  socket: null,
+  connected: false,
+  connecting: false,
+  shouldReconnect: true,
+  roomId: "",
+  role: launchedAsPlayer ? "player" : "gm",
+  gmToken: "",
+  memberId: PLAYER_ID,
+  reconnectTimer: null,
+  applyingRemote: false,
+};
+let onlineStateTimer = null;
 let editingBlueprintId = null;
 let pendingTokenFiles = [];
 let pendingSequenceFrames = [];
@@ -135,7 +157,7 @@ let framePreviewUrls = [];
 const activeTokenAnimations = new Map();
 const activeTokenImpacts = new Map();
 
-if (new URLSearchParams(window.location.search).get("mode") === "player") {
+if (launchedAsPlayer) {
   state.ui.role = "player";
   state.ui.activeTool = "select";
 }
@@ -145,6 +167,17 @@ function makeId(prefix) {
     return `${prefix}-${window.crypto.randomUUID()}`;
   }
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function normalizeServerBase(value) {
+  if (!value) return "";
+  try {
+    const url = new URL(String(value), window.location.origin);
+    if (!(["http:", "https:"].includes(url.protocol))) return "";
+    return url.origin;
+  } catch {
+    return "";
+  }
 }
 
 function clamp(value, min, max) {
@@ -435,14 +468,212 @@ function normalizeState(value) {
   return normalized;
 }
 
-function saveState() {
+function saveState({ sync = true } = {}) {
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     els.saveIndicator.innerHTML = '<span class="status-dot"></span> salvo localmente';
+    if (sync && !realtime.applyingRemote) scheduleRealtimeState();
   } catch (error) {
     els.saveIndicator.innerHTML = '<span class="status-dot" style="background:var(--rose)"></span> armazenamento cheio';
     showToast("O armazenamento local atingiu o limite. Use imagens menores no beta.", true);
     console.warn("Não foi possível salvar o estado local.", error);
+  }
+}
+
+function updateConnectionStatus(status, message) {
+  if (!els.connectionStatus) return;
+  const labels = {
+    online: "online",
+    connecting: "conectando",
+    offline: "offline",
+    error: "sem servidor",
+  };
+  els.connectionStatus.className = `connection-status ${status}`;
+  els.connectionStatus.textContent = message || labels[status] || status;
+  els.connectionStatus.title = onlineServerBase
+    ? `Sala online: ${onlineServerBase}`
+    : "Nenhum servidor online configurado nesta página.";
+}
+
+function readOnlineCredentials() {
+  try {
+    const credentials = JSON.parse(window.localStorage.getItem(ONLINE_CREDENTIALS_KEY) || "null");
+    if (!credentials || credentials.serverUrl !== onlineServerBase || !credentials.roomId || !credentials.gmToken) return null;
+    return credentials;
+  } catch {
+    return null;
+  }
+}
+
+function storeOnlineCredentials(credentials) {
+  try {
+    window.localStorage.setItem(ONLINE_CREDENTIALS_KEY, JSON.stringify({
+      serverUrl: onlineServerBase,
+      roomId: credentials.roomId,
+      gmToken: credentials.gmToken,
+    }));
+  } catch (error) {
+    console.warn("Não foi possível guardar a credencial da sala online.", error);
+  }
+}
+
+function buildWebSocketUrl(roomId, role, gmToken = "") {
+  const url = new URL("/ws", onlineServerBase);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.searchParams.set("room", roomId);
+  url.searchParams.set("role", role);
+  url.searchParams.set("member", currentMemberId());
+  if (role === "gm") url.searchParams.set("token", gmToken);
+  return url.toString();
+}
+
+function sendRealtimeState() {
+  if (!realtime.socket || realtime.socket.readyState !== 1 || realtime.applyingRemote) return;
+  try {
+    realtime.socket.send(JSON.stringify({ type: "state", state }));
+  } catch (error) {
+    console.warn("Não foi possível enviar o estado para a sala online.", error);
+  }
+}
+
+function scheduleRealtimeState() {
+  if (!onlineServerBase || realtime.applyingRemote || !realtime.socket || realtime.socket.readyState !== 1) return;
+  window.clearTimeout(onlineStateTimer);
+  onlineStateTimer = window.setTimeout(() => {
+    onlineStateTimer = null;
+    sendRealtimeState();
+  }, 90);
+}
+
+function applyRemoteState(incomingState) {
+  if (!incomingState || typeof incomingState !== "object") return;
+  const localUi = state.ui;
+  const normalizedIncoming = normalizeState(incomingState);
+  state = normalizedIncoming;
+  state.ui = {
+    ...normalizedIncoming.ui,
+    ...localUi,
+    role: launchedAsPlayer ? "player" : localUi.role,
+    panels: { ...normalizedIncoming.ui.panels, ...localUi.panels },
+  };
+  realtime.applyingRemote = true;
+  try {
+    saveState({ sync: false });
+    renderAll();
+  } finally {
+    realtime.applyingRemote = false;
+  }
+}
+
+function handleRealtimeMessage(message) {
+  if (!message || typeof message !== "object") return;
+  if (message.type === "state") {
+    if (message.roomId) realtime.roomId = String(message.roomId);
+    applyRemoteState(message.state);
+    return;
+  }
+  if (message.type === "error") {
+    updateConnectionStatus("error", "erro de sincronização");
+    showToast(message.message || "O servidor recusou a atualização.", true);
+  }
+}
+
+function connectRealtime(roomId, role, gmToken = "") {
+  if (!onlineServerBase || !roomId || !window.WebSocket) {
+    updateConnectionStatus("offline", "offline");
+    return;
+  }
+  window.clearTimeout(realtime.reconnectTimer);
+  if (realtime.socket && realtime.socket.readyState < 2) realtime.socket.close();
+  realtime.connected = false;
+  realtime.connecting = true;
+  realtime.roomId = roomId;
+  realtime.role = role;
+  realtime.gmToken = gmToken;
+  updateConnectionStatus("connecting", "conectando");
+
+  const socket = new window.WebSocket(buildWebSocketUrl(roomId, role, gmToken));
+  realtime.socket = socket;
+  socket.addEventListener("open", () => {
+    if (realtime.socket !== socket) return;
+    realtime.connected = true;
+    realtime.connecting = false;
+    updateConnectionStatus("online", "online");
+    if (role === "gm") sendRealtimeState();
+  });
+  socket.addEventListener("message", (event) => {
+    if (realtime.socket !== socket) return;
+    try {
+      handleRealtimeMessage(JSON.parse(event.data));
+    } catch (error) {
+      console.warn("Mensagem inválida recebida da sala online.", error);
+    }
+  });
+  socket.addEventListener("error", () => {
+    if (realtime.socket === socket) updateConnectionStatus("error", "sem conexão");
+  });
+  socket.addEventListener("close", () => {
+    if (realtime.socket !== socket) return;
+    realtime.socket = null;
+    realtime.connected = false;
+    realtime.connecting = false;
+    updateConnectionStatus("offline", "reconectando");
+    if (realtime.shouldReconnect) {
+      realtime.reconnectTimer = window.setTimeout(() => connectRealtime(roomId, role, gmToken), 3500);
+    }
+  });
+}
+
+async function createOnlineRoom() {
+  const response = await fetch(`${onlineServerBase}/api/rooms`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ state }),
+  });
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+  if (!response.ok || !payload?.roomId || !payload?.gmToken) {
+    throw new Error(payload?.error || "Não foi possível criar a sala online.");
+  }
+  state.room.id = payload.roomId;
+  saveState({ sync: false });
+  storeOnlineCredentials(payload);
+  return payload;
+}
+
+async function initRealtime() {
+  if (!onlineServerBase) {
+    updateConnectionStatus("offline", "somente local");
+    return;
+  }
+  if (!window.WebSocket) {
+    updateConnectionStatus("error", "WebSocket indisponível");
+    return;
+  }
+  if (launchedAsPlayer) {
+    if (!requestedRoomId) {
+      updateConnectionStatus("error", "link sem sala");
+      showToast("Este link de Player não contém uma sala online.", true);
+      return;
+    }
+    connectRealtime(requestedRoomId, "player");
+    return;
+  }
+
+  try {
+    let credentials = readOnlineCredentials();
+    if (!credentials) credentials = await createOnlineRoom();
+    state.room.id = credentials.roomId;
+    saveState({ sync: false });
+    connectRealtime(credentials.roomId, "gm", credentials.gmToken);
+  } catch (error) {
+    updateConnectionStatus("error", "servidor indisponível");
+    showToast("A sala online não respondeu; o modo local continua disponível.", true);
+    console.warn("Não foi possível iniciar a sala online.", error);
   }
 }
 
@@ -2761,11 +2992,14 @@ function renameRoom() {
 
 async function shareRoom() {
   if (currentRole() !== "gm") return;
+  const roomId = realtime.roomId || readOnlineCredentials()?.roomId || state.room.id;
   const base = `${window.location.origin}${window.location.pathname}`;
-  const url = `${base}?room=${encodeURIComponent(state.room.id)}&mode=player`;
+  const params = new URLSearchParams({ room: roomId, mode: "player" });
+  if (onlineServerBase && onlineServerBase !== window.location.origin) params.set("server", onlineServerBase);
+  const url = `${base}?${params.toString()}`;
   try {
     await navigator.clipboard.writeText(url);
-    showToast("Link de demonstração do Player copiado.");
+    showToast(realtime.connected ? "Link online do Player copiado." : "Link copiado; o servidor online ainda não está conectado.");
   } catch {
     window.prompt("Copie o link do Player:", url);
   }
@@ -3002,6 +3236,7 @@ function init() {
  window.addEventListener("resize", renderLighting);
   if (window.ResizeObserver) new ResizeObserver(renderLighting).observe(els.stage);
   renderAll();
+  initRealtime();
 }
 
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
