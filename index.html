@@ -6,10 +6,10 @@
     <meta name="theme-color" content="#0b1118" />
     <meta
       name="description"
-      content="Beta de um tabletop web para RPG com cenas, tokens, permissões, luz e sequências narrativas."
+      content="Beta de um tabletop web para RPG com cenas, tokens, permissões, luz e animações temporárias."
     />
     <title>Tabletop RPG — Beta</title>
-    <link rel="stylesheet" href="styles.css?v=8" />
+    <link rel="stylesheet" href="styles.css?v=9" />
   </head>
   <body data-role="gm">
     <div class="app-shell">
@@ -90,8 +90,8 @@
             <button class="primary-button full-width" id="newToken"><span>＋</span> Novo token</button>
             <div class="asset-list" id="tokenList"></div>
 
-            <div class="section-label sequence-label"><span>ANIMAÇÕES / SEQUÊNCIAS</span><span id="sequenceCount">0</span></div>
-            <div class="sequence-note">Crie uma sequência clicável: cada frame pode ter sua própria imagem e frase.</div>
+            <div class="section-label sequence-label"><span>ANIMAÇÕES DOS TOKENS</span><span id="sequenceCount">0</span></div>
+            <div class="sequence-note">As animações ficam salvas no próprio token. Selecione um token para ativar, editar ou criar uma.</div>
             <div class="asset-list compact-list" id="sequenceList"></div>
           </section>
 
@@ -169,7 +169,7 @@
               <span class="switch-ui"></span>
             </label>
             <label class="switch-row permission-row">
-              <span><strong>Interagir com animações</strong><small>Permite abrir sequências clicáveis.</small></span>
+              <span><strong>Ativar animações dos tokens</strong><small>Permite ativar a animação do próprio token.</small></span>
               <input type="checkbox" data-permission="interactSequences" checked />
               <span class="switch-ui"></span>
             </label>
@@ -188,7 +188,7 @@
               <button class="tool-button" data-tool="wall" title="Desenhar barreira (W)"><span>╱</span><em>Barreira</em></button>
               <button class="tool-button" data-tool="light" title="Adicionar luz (L)"><span>◌</span><em>Luz</em></button>
               <button class="tool-button" data-tool="darkness" title="Criar área escura (D)"><span>◼</span><em>Escuridão</em></button>
-              <button class="tool-button" data-tool="hotspot" title="Criar animação clicável (H)"><span>✦</span><em>Animação</em></button>
+              <button class="tool-button" data-tool="animation" title="Ativar animação de um token (H)"><span>✦</span><em>Animação</em></button>
             </div>
             <div class="canvas-context">
               <span class="scene-chip" id="sceneChip">CENA INICIAL</span>
@@ -290,28 +290,28 @@
     <dialog class="modal sequence-editor-modal" id="sequenceDialog">
       <form method="dialog" id="sequenceForm" class="modal-card">
         <div class="modal-header">
-          <div><div class="eyebrow">CLICKABLE ANIMATION</div><h2>Nova animação</h2></div>
+          <div><div class="eyebrow">TOKEN ANIMATION</div><h2 id="sequenceDialogTitle">Nova animação do token</h2></div>
           <button class="icon-button modal-close" value="cancel" aria-label="Fechar">×</button>
         </div>
-        <label class="field-label" for="sequenceName">Nome da sequência</label>
-        <input class="text-input" id="sequenceName" type="text" maxlength="60" placeholder="Ex.: A porta começa a respirar" required />
-        <label class="field-label" for="sequenceSpeaker">Nome exibido</label>
+        <label class="field-label" for="sequenceName">Nome da animação</label>
+        <input class="text-input" id="sequenceName" type="text" maxlength="60" placeholder="Ex.: Golpe, dano ou transformação" required />
+        <label class="field-label" for="sequenceSpeaker">Legenda / autor (opcional)</label>
         <input class="text-input" id="sequenceSpeaker" type="text" maxlength="40" placeholder="Narrador" />
         <div class="sequence-builder-intro">
           <div class="eyebrow">COMO FUNCIONA</div>
-          <p>Um cartão = um momento. Coloque a imagem e a frase no mesmo cartão; o Player avança pelos cartões ao clicar em <strong>Próximo</strong>.</p>
+          <p>Um cartão = um momento do token. Ao ativar, os frames passam automaticamente; depois do último, o token volta ao estado que tinha antes.</p>
         </div>
         <div class="sequence-builder-heading">
           <div>
-            <label class="field-label">Frames da animação</label>
-            <small class="form-help">Até 12 frames. A imagem é opcional: você pode usar apenas texto.</small>
+            <label class="field-label">Frames temporários</label>
+            <small class="form-help">Até 12 frames. Cada um pode trocar a imagem, mostrar uma frase ou fazer os dois.</small>
           </div>
           <button class="quiet-button add-frame-button" id="addSequenceFrame" type="button">＋ Adicionar frame</button>
         </div>
         <div class="sequence-frame-list" id="sequenceFrameList"></div>
         <div class="modal-actions">
           <button class="quiet-button" value="cancel">Cancelar</button>
-          <button class="primary-button" value="default">Criar animação</button>
+          <button class="primary-button" value="default">Salvar animação</button>
         </div>
       </form>
     </dialog>
@@ -333,6 +333,6 @@
     </dialog>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="app.js?v=8" defer></script>
+    <script src="app.js?v=9" defer></script>
   </body>
 </html>
