@@ -166,32 +166,34 @@
             </div>
             <div class="canvas-context">
               <span class="scene-chip" id="sceneChip">CENA INICIAL</span>
-              <span class="tool-status" id="toolStatus">Clique em um token para inspecionar</span>
+              <span class="tool-status" id="toolStatus">Arraste o fundo para mover · roda para zoom</span>
             </div>
             <div class="toolbar-group right-tools">
-              <button class="tool-button subtle" id="resetView" title="Recentrar mapa"><span>⌂</span><em>Centro</em></button>
+              <button class="tool-button subtle" id="resetView" title="Recentrar mapa e restaurar zoom"><span>⌂</span><em>Centro</em></button>
               <button class="tool-button subtle" id="clearSelection" title="Limpar seleção"><span>×</span><em>Limpar</em></button>
             </div>
           </div>
 
           <div class="stage-frame">
             <div class="stage" id="stage" tabindex="0" aria-label="Canvas da cena">
-              <div class="map-placeholder" id="mapPlaceholder">
-                <div class="placeholder-grid"></div>
-                <div class="placeholder-copy">
-                  <span class="placeholder-mark">＋</span>
-                  <strong>Adicione um mapa à cena</strong>
-                  <small>Use a Biblioteca do Mestre para importar uma imagem.</small>
+              <div class="scene-viewport" id="sceneViewport">
+                <div class="map-placeholder" id="mapPlaceholder">
+                  <div class="placeholder-grid"></div>
+                  <div class="placeholder-copy">
+                    <span class="placeholder-mark">＋</span>
+                    <strong>Adicione um mapa à cena</strong>
+                    <small>Use a Biblioteca do Mestre para importar uma imagem.</small>
+                  </div>
                 </div>
+                <img id="mapImage" class="map-image" alt="Mapa da cena" hidden />
+                <div class="scene-vignette"></div>
+                <svg id="wallsLayer" class="walls-layer" viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true"></svg>
+                <canvas id="lightingCanvas" class="lighting-canvas" aria-hidden="true"></canvas>
+                <div id="lightsLayer" class="lights-layer" aria-hidden="true"></div>
+                <div id="hotspotsLayer" class="hotspots-layer"></div>
+                <div id="tokensLayer" class="tokens-layer"></div>
+                <div class="wall-draft" id="wallDraft" hidden></div>
               </div>
-              <img id="mapImage" class="map-image" alt="Mapa da cena" hidden />
-              <div class="scene-vignette"></div>
-              <svg id="wallsLayer" class="walls-layer" viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true"></svg>
-              <canvas id="lightingCanvas" class="lighting-canvas" aria-hidden="true"></canvas>
-              <div id="lightsLayer" class="lights-layer" aria-hidden="true"></div>
-              <div id="hotspotsLayer" class="hotspots-layer"></div>
-              <div id="tokensLayer" class="tokens-layer"></div>
-              <div class="wall-draft" id="wallDraft" hidden></div>
               <div class="stage-empty-hint" id="stageHint">Arraste um token da Biblioteca ou adicione um mapa para começar.</div>
             </div>
           </div>
