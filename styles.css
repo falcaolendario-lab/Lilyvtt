@@ -65,6 +65,14 @@ button { color: inherit; }
 .top-actions { gap: 10px; margin-left: auto; }
 .save-indicator { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; white-space: nowrap; }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--cyan-strong); box-shadow: 0 0 10px rgba(67, 201, 194, 0.65); }
+.connection-status { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 10px; white-space: nowrap; }
+.connection-status::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
+.connection-status.online { color: var(--cyan); }
+.connection-status.online::before { background: var(--cyan-strong); box-shadow: 0 0 10px rgba(67, 201, 194, .65); }
+.connection-status.connecting { color: var(--amber); }
+.connection-status.connecting::before { background: var(--amber); }
+.connection-status.error { color: var(--rose); }
+.connection-status.error::before { background: var(--rose); }
 
 .role-switch { padding: 3px; gap: 2px; border: 1px solid var(--line); border-radius: 9px; background: rgba(255,255,255,0.025); }
 .role-button, .side-tab, .tool-button, .quiet-button, .icon-button, .primary-button {
@@ -446,6 +454,7 @@ body.linked-player .role-switch { display: none; }
   .room-identity { order: 3; width: 100%; padding: 8px 0 0; border-left: 0; border-top: 1px solid var(--line); }
   .top-actions { gap: 5px; }
   .save-indicator { display: none; }
+  .connection-status { font-size: 9px; }
   .beta-strip { padding: 7px 13px; }
   .workspace { display: block; }
   .left-sidebar { min-height: auto; max-height: none; border-right: 0; border-bottom: 1px solid var(--line); }
