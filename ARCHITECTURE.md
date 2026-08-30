@@ -21,7 +21,7 @@ Room
 └── scenes[]
     ├── mapAssetId
     ├── camera { x, y, zoom }
-    ├── tokens[]
+    ├── tokens[] (posição, tamanho, rotação, visibilidade)
     ├── walls[]
     ├── lights[]
     └── hotspots[]
@@ -34,6 +34,10 @@ Room
 ### Cena
 
 Uma cena referencia um mapa através de `mapAssetId`. As paredes, luzes e tokens são específicos daquela cena. Os assets continuam disponíveis para outras cenas.
+
+### Visibilidade dos tokens
+
+Cada instância possui `visibleToPlayers`. O Mestre continua vendo todos os tokens; o Player recebe somente os tokens marcados como visíveis. Ocultar um token não o remove da cena nem da Biblioteca.
 
 ### Permissões
 
@@ -52,7 +56,8 @@ Camadas planejadas:
 
 ```text
 Mapa
-→ Máscara de iluminação/visão
+→ Máscara de iluminação/visão, quando houver fonte de visão
+→ Áreas escuras manuais
 → Objetos e hotspots
 → Tokens
 → Efeitos e primeiro plano
