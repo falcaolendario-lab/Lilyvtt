@@ -178,11 +178,14 @@ h1, h2, p { margin: 0; }
 .stage {
   position: relative; flex: 1; min-height: 420px; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 10px;
   background-color: #131c24; background-image: linear-gradient(rgba(131,225,220,.045) 1px, transparent 1px), linear-gradient(90deg, rgba(131,225,220,.045) 1px, transparent 1px), radial-gradient(circle at 40% 35%, rgba(63, 105, 121, .22), transparent 42%);
-  background-size: 36px 36px, 36px 36px, 100% 100%; box-shadow: var(--shadow); isolation: isolate;
+  background-size: 36px 36px, 36px 36px, 100% 100%; box-shadow: var(--shadow); isolation: isolate; cursor: grab; touch-action: none; user-select: none;
 }
 .stage:focus { outline: 2px solid rgba(131,225,220,.45); outline-offset: -2px; }
+.stage.pan-active { cursor: grabbing; }
+.stage[data-tool="wall"], .stage[data-tool="light"], .stage[data-tool="hotspot"] { cursor: crosshair; }
 .stage.map-active { background-image: none; }
 .map-placeholder, .map-image, .scene-vignette, .walls-layer, .lighting-canvas, .lights-layer, .hotspots-layer, .tokens-layer { position: absolute; inset: 0; }
+.scene-viewport { position: absolute; inset: 0; width: 100%; height: 100%; transform-origin: 0 0; will-change: transform; }
 .map-placeholder { display: grid; place-items: center; z-index: 0; }
 .placeholder-grid { position: absolute; inset: 0; opacity: .42; background-image: linear-gradient(rgba(131,225,220,.06) 1px, transparent 1px), linear-gradient(90deg, rgba(131,225,220,.06) 1px, transparent 1px); background-size: 36px 36px; }
 .placeholder-copy { position: relative; z-index: 1; display: grid; justify-items: center; gap: 7px; padding: 22px; border: 1px solid var(--line); border-radius: 11px; background: rgba(10,14,19,.72); text-align: center; }
