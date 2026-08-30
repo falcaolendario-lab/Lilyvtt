@@ -78,11 +78,19 @@ Pode editar a cena, importar assets, criar barreiras/luzes/hotspots, posicionar 
 
 ### Player
 
-Recebe uma tela limpa, sem ferramentas de edição. Pode mover e alterar apenas o que o Mestre liberar. O link de Player desta versão é um modo de demonstração local; a sala online real será a próxima camada.
+Recebe uma tela limpa, sem ferramentas de edição. Pode mover e alterar apenas o que o Mestre liberar. Na sala online, o servidor filtra o estado antes de enviá-lo: tokens ocultos e ferramentas administrativas nunca chegam ao Player.
 
-## Próxima camada: sala online
+## Sala online
 
-Quando o beta local estiver aprovado, o armazenamento poderá ser dividido em:
+O beta usa uma sala Node com WebSocket e persistência JSON. O estado completo permanece no servidor, enquanto cada cliente recebe uma projeção adequada ao seu papel:
+
+```text
+Mestre ── estado completo + credencial ──┐
+                                         ├── servidor da sala ── Player: mapa + estado público
+Player ── posição/estado do próprio token┘
+```
+
+O servidor mantém uma estrutura que pode migrar para banco externo:
 
 ```text
 Room database
@@ -109,21 +117,22 @@ As ações serão eventos de sala, por exemplo:
 }
 ```
 
-O servidor verifica a permissão, salva o novo estado e retransmite o evento para os clientes autorizados.
+O servidor verifica a permissão, salva o novo estado e retransmite o estado filtrado para os clientes autorizados. O Player não consegue adicionar objetos, editar mapa, alterar luzes/escuridão ou revelar tokens ocultos enviando dados pelo navegador.
 
 ## Rodar localmente
 
 Na pasta do projeto:
 
 ```bash
-python3 -m http.server 4173
+npm install
+npm start
 ```
 
-Depois, abra `http://localhost:4173` no navegador. O estado do beta fica salvo no armazenamento local do navegador.
+Depois, abra `http://localhost:8787` no navegador. O servidor grava as salas em `server/data/rooms.json`; o armazenamento local continua guardando a cópia de trabalho e a credencial privada do Mestre.
 
 ## Limites intencionais do beta
 
-- Não há sincronização entre dispositivos ainda.
-- Os arquivos enviados ficam no armazenamento local do navegador.
+- O servidor JSON é uma persistência de beta; para produção, use disco persistente ou banco externo.
+- Os arquivos enviados também são transportados dentro do estado da sala como data URLs; imagens muito grandes devem ser reduzidas.
 - A máscara de luz é uma primeira versão geométrica; portas, janelas, luzes cônicas e sombras suaves entram depois.
 - A sequência narrativa já aceita vários frames de imagem e uma frase por frame, mas ainda não possui ramificações ou áudio.
