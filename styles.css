@@ -204,13 +204,14 @@ h1, h2, p { margin: 0; }
 .hotspot { position: absolute; width: 28px; height: 28px; transform: translate(-50%, -50%); display: grid; place-items: center; border: 1px solid rgba(185,169,255,.7); border-radius: 50%; color: var(--violet); background: rgba(120,101,209,.26); box-shadow: 0 0 0 6px rgba(185,169,255,.06), 0 0 22px rgba(185,169,255,.32); pointer-events: auto; cursor: pointer; font-size: 15px; }
 .hotspot:hover { background: rgba(185,169,255,.35); transform: translate(-50%, -50%) scale(1.08); }
 .tokens-layer { z-index: 10; pointer-events: none; }
-.token { position: absolute; width: var(--token-size); aspect-ratio: 1; transform: translate(-50%, -50%); display: grid; place-items: center; border: 2px solid rgba(232,241,246,.72); border-radius: 50%; background: #1a252e; box-shadow: 0 8px 16px rgba(0,0,0,.38); pointer-events: auto; cursor: grab; user-select: none; touch-action: none; transition: border-color .14s ease, box-shadow .14s ease; }
+.token { position: absolute; width: var(--token-size); aspect-ratio: 1; transform: translate(-50%, -50%); display: grid; place-items: center; border: 0; border-radius: 2px; background: transparent; pointer-events: auto; cursor: grab; user-select: none; touch-action: none; transition: filter .14s ease, outline-color .14s ease, box-shadow .14s ease; }
 .token:active { cursor: grabbing; }
-.token.selected { border-color: var(--cyan); box-shadow: 0 0 0 4px rgba(131,225,220,.17), 0 9px 18px rgba(0,0,0,.42); }
-.token.player-owned { border-color: rgba(131,225,220,.78); }
-.token img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; pointer-events: none; }
-.token-fallback { width: 100%; height: 100%; display: grid; place-items: center; border-radius: 50%; background: radial-gradient(circle at 32% 25%, #4c6f7a, #1b2b35 65%); color: #e6fbf7; font-size: clamp(12px, 2vw, 20px); font-weight: 850; }
-.token-tag { position: absolute; top: calc(100% + 5px); max-width: 110px; padding: 3px 5px; overflow: hidden; border-radius: 4px; color: #cbd8df; background: rgba(6,9,12,.8); font-size: 8px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
+.token.selected { outline: 2px solid var(--cyan); outline-offset: 3px; box-shadow: 0 0 0 6px rgba(131,225,220,.13), 0 9px 18px rgba(0,0,0,.36); }
+.token.player-owned { filter: drop-shadow(0 0 4px rgba(131,225,220,.48)); }
+.token img { width: 100%; height: 100%; border-radius: 0; object-fit: contain; pointer-events: none; }
+.token-fallback { width: 100%; height: 100%; display: grid; place-items: center; border: 1px solid rgba(131,225,220,.45); border-radius: 5px; background: linear-gradient(145deg, #314b56, #17242c); color: #e6fbf7; font-size: clamp(12px, 2vw, 20px); font-weight: 850; }
+.token-tag { position: absolute; top: calc(100% + 5px); max-width: 110px; padding: 3px 5px; overflow: hidden; border-radius: 4px; opacity: 0; color: #cbd8df; background: rgba(6,9,12,.8); font-size: 8px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; transition: opacity .14s ease; }
+.token:hover .token-tag, .token.selected .token-tag { opacity: 1; }
 .wall-draft { position: absolute; z-index: 12; width: 9px; height: 9px; transform: translate(-50%, -50%); border: 2px solid var(--amber); border-radius: 50%; box-shadow: 0 0 0 5px rgba(244,199,131,.15); pointer-events: none; }
 .stage-empty-hint { position: absolute; right: 12px; bottom: 11px; z-index: 13; max-width: 300px; padding: 6px 8px; border: 1px solid rgba(185,211,229,.12); border-radius: 5px; color: var(--muted); background: rgba(7,10,13,.65); font-size: 9px; pointer-events: none; }
 
