@@ -11,12 +11,16 @@ Protótipo de um VTT leve com foco em uma experiência simples como uma mesa com
 - múltiplas imagens por token;
 - troca de estado pelas teclas `1` a `9`;
 - tokens pertencentes a jogadores;
+- tokens com visibilidade individual para os Players;
 - permissões para mover e editar estados;
+- redimensionamento direto dos tokens pelos cantos ou pela roda do mouse;
+- exclusão de qualquer objeto selecionado com `Ctrl+X` (`Delete` também funciona);
 - câmera com arraste do fundo, zoom pela roda do mouse e botão de centralizar;
 - grid quadrado sempre visível, com linhas finas e baixa opacidade;
 - barreiras desenhadas no canvas;
 - colisão básica de movimento;
 - máscara de visão com luz suave e barreiras;
+- áreas escuras manuais, texturizadas e reposicionáveis;
 - hotspots narrativos;
 - sequências com imagens e frases;
 - armazenamento local para preservar as preparações do Mestre.
@@ -30,8 +34,10 @@ Protótipo de um VTT leve com foco em uma experiência simples como uma mesa com
 5. Arraste o fundo para mover a câmera; use a roda do mouse para aproximar ou afastar.
 6. Selecione o token e teste as teclas `1`, `2` e `3`.
 7. Troque o mapa na Biblioteca: o token continua salvo na cena.
-8. Use `W` para desenhar uma barreira, `L` para colocar uma luz e `H` para criar um hotspot.
+8. Use `W` para desenhar uma barreira, `L` para colocar uma luz, `D` para criar uma área escura e `H` para testar uma animação.
 9. Alterne para Player e teste as permissões.
+
+No modo Mestre, selecione um token para mostrar os quatro cantos de redimensionamento. Desative `Visível para Players` no Inspector para ocultá-lo sem removê-lo da cena.
 
 ## Próximo marco
 
