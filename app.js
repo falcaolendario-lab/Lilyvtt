@@ -9,7 +9,7 @@
  */
 
 const STORAGE_KEY = "tabletop-rpg-beta-state-v1";
-const STATE_SCHEMA_VERSION = 3;
+const STATE_SCHEMA_VERSION = 4;
 const PLAYER_ID = "player-1";
 const DEFAULT_LIGHT_COLOR = "#f4c783";
 const MAX_TOKEN_ANIMATION_FRAMES = 12;
@@ -74,6 +74,10 @@ const els = {
   gmLightingPreview: $("#gmLightingPreview"),
   darknessOpacity: $("#darknessOpacity"),
   darknessOpacityValue: $("#darknessOpacityValue"),
+  analyzeMapLighting: $("#analyzeMapLighting"),
+  createSuggestedLights: $("#createSuggestedLights"),
+  clearMapAnalysis: $("#clearMapAnalysis"),
+  mapAnalysisStatus: $("#mapAnalysisStatus"),
   newLightColor: $("#newLightColor"),
   selectionAvatar: $("#selectionAvatar"),
   selectionName: $("#selectionName"),
@@ -132,6 +136,8 @@ let removedTokenImageKeys = new Set();
 let framePreviewUrls = [];
 const activeTokenAnimations = new Map();
 const activeTokenImpacts = new Map();
+let mapAnalysisTexture = null;
+let mapAnalysisTextureSource = null;
 
 if (new URLSearchParams(window.location.search).get("mode") === "player") {
   state.ui.role = "player";
@@ -200,6 +206,7 @@ function initialState() {
         walls: [],
         lights: [],
         darknessZones: [],
+        mapAnalysis: null,
         hotspots: [],
       },
     ],
@@ -262,9 +269,9 @@ function normalizeTokens(tokens) {
       ownerId: String(token.ownerId || PLAYER_ID),
       ...normalizePoint(token),
       size: clamp(Number(token.size) || 0.08, 0.025, 0.5),
-      activeKey: String(token.activeKey || "1"),
-      rotation: Number.isFinite(Number(token.rotation)) ? Number(token.rotation) : 0,
-      visionRange: clamp(Number(token.visionRange) || 0, 0, 2),
+     activeKey: String(token.activeKey || "1"),
+      rotation: Number.isFinite(Number(token.rotation)) ? clamp(Number(token.rotation), -180, 180) : 0,
+     visionRange: clamp(Number(token.visionRange) || 0, 0, 2),
     });
     return normalizedTokens;
   }, []);
@@ -340,6 +347,25 @@ function normalizeDarknessZones(zones) {
   }, []);
 }
 
+function normalizeMapAnalysis(value) {
+  if (!value || typeof value !== "object") return null;
+  const cols = clamp(Math.round(Number(value.cols) || 64), 16, 96);
+  const rows = clamp(Math.round(Number(value.rows) || 48), 16, 96);
+  const source = Array.isArray(value.luminance) ? value.luminance : [];
+  const luminance = Array.from({ length: cols * rows }, (_, index) => {
+    const sample = Number(source[index]);
+    return clamp(Number.isFinite(sample) ? sample : 0.5, 0, 1);
+  });
+ return {
+   mapAssetId: String(value.mapAssetId || ""),
+   cols,
+   rows,
+   luminance,
+    sourceWidth: Number(value.sourceWidth) || cols,
+    sourceHeight: Number(value.sourceHeight) || rows,
+ };
+}
+
 function normalizeTokenAnimations(animations) {
   const seenIds = new Set();
   return (Array.isArray(animations) ? animations : []).reduce((normalizedAnimations, animation) => {
@@ -410,6 +436,7 @@ function normalizeState(value) {
     walls: normalizeWalls(Array.isArray(scene.walls) ? scene.walls : []),
     lights: normalizeLights(Array.isArray(scene.lights) ? scene.lights : []),
     darknessZones: normalizeDarknessZones(Array.isArray(scene.darknessZones) ? scene.darknessZones : []),
+    mapAnalysis: normalizeMapAnalysis(scene.mapAnalysis),
     hotspots: (Array.isArray(scene.hotspots) ? scene.hotspots : [])
       .filter((hotspot) => hotspot?.id !== "hotspot-example")
       .map((hotspot) => ({ ...hotspot, ...normalizePoint(hotspot), visible: hotspot.visible !== false })),
@@ -439,6 +466,18 @@ function saveState() {
 
 function currentScene() {
   return state.scenes.find((scene) => scene.id === state.activeSceneId) || state.scenes[0];
+}
+
+function currentMapAsset() {
+  const scene = currentScene();
+  return state.library.maps.find((map) => map.id === scene.mapAssetId) || null;
+}
+
+function currentMapAnalysis() {
+  const scene = currentScene();
+  return scene.mapAnalysis && scene.mapAnalysis.mapAssetId === scene.mapAssetId
+    ? scene.mapAnalysis
+    : null;
 }
 
 function currentCamera() {
@@ -936,6 +975,18 @@ function renderSidebar() {
   els.gmLightingPreview.checked = state.ui.gmLightingPreview !== false;
   els.newLightColor.value = normalizeHexColor(state.ui.newLightColor);
   updateLightPresetStyles();
+  const mapAsset = currentMapAsset();
+  const mapAnalysis = currentMapAnalysis();
+  if (els.analyzeMapLighting) els.analyzeMapLighting.disabled = !mapAsset;
+  if (els.createSuggestedLights) els.createSuggestedLights.disabled = !mapAnalysis;
+  if (els.clearMapAnalysis) els.clearMapAnalysis.disabled = !mapAnalysis;
+  if (els.mapAnalysisStatus) {
+    els.mapAnalysisStatus.textContent = !mapAsset
+      ? "Adicione um mapa para habilitar a análise."
+      : mapAnalysis
+        ? "Análise ativa · " + mapAnalysis.cols + " × " + mapAnalysis.rows + " amostras."
+        : "Nenhuma análise feita para este mapa.";
+  }
   els.darknessOpacity.value = String(darknessOpacity);
   els.darknessOpacityValue.textContent = `${darknessOpacity}%`;
   $$('[data-permission]').forEach((input) => {
@@ -1179,9 +1230,17 @@ function renderInspector() {
         <div class="permission-summary">
           <div><span>Dono</span><b>${escapeHtml(state.members.find((member) => member.id === token.ownerId)?.name || "Mestre")}</b></div>
           <div><span>Posição</span><b>${Math.round(token.x * 100)}% / ${Math.round(token.y * 100)}%</b></div>
-          <div><span>Visão</span><b>${token.visionRange ? `${Math.round(token.visionRange * 100)}u` : "desligada"}</b></div>
-        </div>
-      </div>
+         <div><span>Visão</span><b>${token.visionRange ? `${Math.round(token.visionRange * 100)}u` : "desligada"}</b></div>
+       </div>
+        <label class="range-row inspector-range">
+          <span><strong>Tamanho</strong><output data-token-output="size">${Math.round(token.size * 100)}%</output></span>
+          <input type="range" min="3" max="50" step="1" value="${Math.round(token.size * 100)}" data-token-control="size" data-token-id="${escapeHtml(token.id)}" />
+        </label>
+        <label class="range-row inspector-range">
+          <span><strong>Rotação</strong><output data-token-output="rotation">${Math.round(Number(token.rotation) || 0)}°</output></span>
+          <input type="range" min="-180" max="180" step="1" value="${Math.round(Number(token.rotation) || 0)}" data-token-control="rotation" data-token-id="${escapeHtml(token.id)}" />
+        </label>
+     </div>
       <div class="inspector-card">
         <div class="eyebrow">IMAGE STATES</div>
         <div class="inspector-meta">Use as teclas numéricas no canvas ou selecione um estado.</div>
@@ -1247,6 +1306,62 @@ function renderInspector() {
       </div>`;
 }
 
+function getMapImageRect(width, height, sourceWidth = null, sourceHeight = null) {
+  const naturalWidth = Number(sourceWidth) || Number(els.mapImage?.naturalWidth) || width;
+  const naturalHeight = Number(sourceHeight) || Number(els.mapImage?.naturalHeight) || height;
+  const scale = Math.min(width / naturalWidth, height / naturalHeight);
+  const imageWidth = naturalWidth * scale;
+  const imageHeight = naturalHeight * scale;
+  return {
+    x: (width - imageWidth) / 2,
+    y: (height - imageHeight) / 2,
+    width: imageWidth,
+    height: imageHeight,
+  };
+}
+
+function getMapAnalysisTexture(analysis) {
+  if (!analysis) return null;
+  if (mapAnalysisTexture && mapAnalysisTextureSource === analysis) return mapAnalysisTexture;
+  const texture = document.createElement("canvas");
+  texture.width = analysis.cols;
+  texture.height = analysis.rows;
+  const textureContext = texture.getContext("2d");
+  const imageData = textureContext.createImageData(analysis.cols, analysis.rows);
+  analysis.luminance.forEach((luminance, index) => {
+    const offset = index * 4;
+    if (luminance < 0.44) {
+      const darkness = Math.round(clamp((0.44 - luminance) / 0.44, 0, 1) * 190);
+      imageData.data[offset] = 2;
+      imageData.data[offset + 1] = 6;
+      imageData.data[offset + 2] = 12;
+      imageData.data[offset + 3] = darkness;
+    } else if (luminance > 0.72) {
+      const glow = Math.round(clamp((luminance - 0.72) / 0.28, 0, 1) * 62);
+      imageData.data[offset] = 244;
+      imageData.data[offset + 1] = 199;
+      imageData.data[offset + 2] = 131;
+      imageData.data[offset + 3] = glow;
+    }
+  });
+  textureContext.putImageData(imageData, 0, 0);
+  mapAnalysisTexture = texture;
+  mapAnalysisTextureSource = analysis;
+  return texture;
+}
+
+function drawMapAnalysis(context, width, height, analysis) {
+  const texture = getMapAnalysisTexture(analysis);
+  if (!texture) return;
+  const rect = getMapImageRect(width, height, analysis.sourceWidth, analysis.sourceHeight);
+  context.save();
+  context.globalCompositeOperation = "source-over";
+  context.globalAlpha = 0.86;
+  context.imageSmoothingEnabled = true;
+  context.drawImage(texture, rect.x, rect.y, rect.width, rect.height);
+  context.restore();
+}
+
 function renderLighting() {
   const canvas = els.lightingCanvas;
   if (!canvas || !els.stage) return;
@@ -1265,14 +1380,20 @@ function renderLighting() {
   const scene = currentScene();
   const ambientOpacity = clamp(Number.isFinite(Number(scene.darknessOpacity)) ? Number(scene.darknessOpacity) : 0.82, 0, 0.98);
   const shouldMask = isLightingPreviewActive() && scene.visionMaskEnabled !== false && !scene.globalIllumination && ambientOpacity > 0.001;
-  if (!shouldMask) {
+  const mapAnalysis = currentMapAnalysis();
+  const shouldRenderAnalysis = Boolean(mapAnalysis);
+  if (!shouldMask && !shouldRenderAnalysis) {
     canvas.hidden = true;
     return;
   }
   canvas.hidden = false;
-  context.globalCompositeOperation = "source-over";
-  context.fillStyle = `rgba(4, 7, 12, ${ambientOpacity})`;
-  context.fillRect(0, 0, width, height);
+  if (shouldMask) {
+    context.globalCompositeOperation = "source-over";
+    context.fillStyle = "rgba(4, 7, 12, " + ambientOpacity + ")";
+    context.fillRect(0, 0, width, height);
+  }
+  if (shouldRenderAnalysis) drawMapAnalysis(context, width, height, mapAnalysis);
+  if (!shouldMask) return;
 
   const sources = [];
   scene.tokens
@@ -1340,6 +1461,137 @@ function renderLighting() {
     }
     context.restore();
   });
+}
+
+function loadMapImage(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Não foi possível ler a imagem do mapa."));
+    image.src = dataUrl;
+  });
+}
+
+function buildMapAnalysis(image, mapAssetId) {
+  const sourceWidth = Number(image.naturalWidth || image.width) || 1;
+  const sourceHeight = Number(image.naturalHeight || image.height) || 1;
+  const cols = 64;
+  const rows = clamp(Math.round(cols * sourceHeight / sourceWidth), 24, 72);
+  const sampleCanvas = document.createElement("canvas");
+  sampleCanvas.width = cols;
+  sampleCanvas.height = rows;
+  const sampleContext = sampleCanvas.getContext("2d", { willReadFrequently: true });
+  sampleContext.drawImage(image, 0, 0, cols, rows);
+ const pixels = sampleContext.getImageData(0, 0, cols, rows).data;
+ const luminance = [];
+  for (let index = 0; index < pixels.length; index += 4) {
+   const alpha = pixels[index + 3] / 255;
+   const value = (pixels[index] * 0.2126 + pixels[index + 1] * 0.7152 + pixels[index + 2] * 0.0722) / 255;
+   luminance.push(alpha < 0.05 ? 0.5 : value);
+  }
+ return { mapAssetId, cols, rows, luminance, sourceWidth, sourceHeight };
+}
+
+function createSuggestedLightsFromAnalysis(analysis) {
+  if (!analysis) return 0;
+  const scene = currentScene();
+  const candidates = [];
+  const getSample = (column, row) => {
+    if (column < 0 || row < 0 || column >= analysis.cols || row >= analysis.rows) return null;
+    return analysis.luminance[row * analysis.cols + column];
+  };
+  for (let row = 1; row < analysis.rows - 1; row += 1) {
+    for (let column = 1; column < analysis.cols - 1; column += 1) {
+      const luminance = getSample(column, row);
+      if (luminance < 0.78) continue;
+      const neighbors = [];
+      for (let rowOffset = -1; rowOffset <= 1; rowOffset += 1) {
+        for (let columnOffset = -1; columnOffset <= 1; columnOffset += 1) {
+          if (!rowOffset && !columnOffset) continue;
+          neighbors.push(getSample(column + columnOffset, row + rowOffset));
+        }
+      }
+      const averageNeighbor = neighbors.reduce((sum, value) => sum + (value || 0), 0) / neighbors.length;
+      if (luminance - averageNeighbor < 0.045) continue;
+      candidates.push({ column, row, luminance });
+   }
+ }
+  candidates.sort((a, b) => b.luminance - a.luminance);
+  const selected = [];
+ const imageRect = getMapImageRect(1, 1, analysis.sourceWidth, analysis.sourceHeight);
+  candidates.forEach((candidate) => {
+    if (selected.length >= 8) return;
+   const x = imageRect.x + ((candidate.column + 0.5) / analysis.cols) * imageRect.width;
+   const y = imageRect.y + ((candidate.row + 0.5) / analysis.rows) * imageRect.height;
+    const tooClose = selected.some((light) => Math.hypot(light.x - x, light.y - y) < 0.12);
+    const existing = scene.lights.some((light) => Math.hypot(light.x - x, light.y - y) < 0.09);
+    if (tooClose || existing) return;
+    selected.push({ x, y, luminance: candidate.luminance });
+  });
+  selected.forEach((candidate) => {
+    scene.lights.push({
+      id: makeId("light"),
+      x: candidate.x,
+      y: candidate.y,
+      radius: clamp(0.14 + (candidate.luminance - 0.78) * 0.45, 0.14, 0.24),
+      falloff: 0.78,
+      intensity: 0.48,
+      color: "#f4c783",
+      providesVision: true,
+      generatedFromMap: true,
+    });
+  });
+  return selected.length;
+}
+
+async function analyzeMapLighting({ suggestLights = false, announce = true } = {}) {
+ if (currentRole() !== "gm") return;
+  const targetScene = currentScene();
+  const mapAsset = currentMapAsset();
+ if (!mapAsset) {
+    showToast("Adicione um mapa antes de analisá-lo.", true);
+    return;
+ }
+ try {
+   if (els.analyzeMapLighting) els.analyzeMapLighting.disabled = true;
+   const image = await loadMapImage(mapAsset.dataUrl);
+   const analysis = buildMapAnalysis(image, mapAsset.id);
+    if (currentRole() !== "gm" || currentScene().id !== targetScene.id || currentScene().mapAssetId !== mapAsset.id) return;
+    targetScene.mapAnalysis = analysis;
+    mapAnalysisTexture = null;
+    mapAnalysisTextureSource = null;
+   const suggestedCount = suggestLights ? createSuggestedLightsFromAnalysis(analysis) : 0;
+   saveState();
+   renderAll();
+   if (announce) showToast(suggestedCount ? `Mapa analisado · ${suggestedCount} luzes sugeridas foram adicionadas.` : "Mapa analisado · claros e escuros estimados.");
+ } catch (error) {
+    if (els.analyzeMapLighting && currentRole() === "gm") els.analyzeMapLighting.disabled = false;
+   showToast(error.message || "Não foi possível analisar o mapa.", true);
+  }
+}
+
+async function createSuggestedLights() {
+  if (currentRole() !== "gm") return;
+  const analysis = currentMapAnalysis();
+  if (!analysis) {
+    await analyzeMapLighting({ suggestLights: true });
+    return;
+  }
+  const count = createSuggestedLightsFromAnalysis(analysis);
+  saveState();
+  renderAll();
+  showToast(count ? `${count} luzes sugeridas adicionadas. Revise ou exclua as que não fizerem sentido.` : "Não encontrei pontos claros contrastantes para sugerir luzes.", !count);
+}
+
+function clearMapAnalysis() {
+  if (currentRole() !== "gm") return;
+  if (!currentScene().mapAnalysis) return;
+  currentScene().mapAnalysis = null;
+  mapAnalysisTexture = null;
+  mapAnalysisTextureSource = null;
+  saveState();
+  renderAll();
+  showToast("A análise visual foi removida. Luzes sugeridas continuam editáveis na cena.");
 }
 
 function hexToRgb(value) {
@@ -1812,7 +2064,7 @@ function finishDarknessDraw(event) {
     y: clamp(y, 0.01, 0.99 - height),
     width: clamp(width, 0.02, 0.98),
     height: clamp(height, 0.02, 0.98),
-    opacity: 0.82,
+    opacity: 0.92,
   };
   currentScene().darknessZones.push(zone);
   activeDarknessDraw = null;
@@ -1984,6 +2236,26 @@ function handleDarknessControl(event) {
   saveState();
 }
 
+function handleTokenControl(event) {
+  if (currentRole() !== "gm") return;
+  const input = event.target.closest("[data-token-control]");
+  if (!input) return;
+  const token = getToken(input.dataset.tokenId);
+  if (!token) return;
+  const property = input.dataset.tokenControl;
+  if (property === "size") token.size = clamp(Number(input.value) / 100, 0.025, 0.5);
+  if (property === "rotation") token.rotation = clamp(Number(input.value), -180, 180);
+  const output = els.inspectorContent.querySelector('[data-token-output="' + property + '"]');
+  if (output) output.textContent = property === "size" ? Math.round(token.size * 100) + "%" : Math.round(token.rotation) + "°";
+  const element = els.tokensLayer.querySelector('[data-token-id="' + CSS.escape(token.id) + '"]');
+  if (element) {
+    element.style.setProperty("--token-size", (token.size * 100) + "%");
+    element.style.transform = "translate(-50%,-50%) rotate(" + token.rotation + "deg)";
+  }
+  renderLighting();
+  saveState();
+}
+
 function togglePanel(panel) {
   if (currentRole() !== "gm") return;
   if (!state.ui.panels) state.ui.panels = { leftOpen: false, rightOpen: false };
@@ -2067,7 +2339,7 @@ function handleStageClick(event) {
       y: clamp(point.y - 0.08, 0.01, 0.83),
       width: 0.18,
       height: 0.16,
-      opacity: 0.82,
+      opacity: 0.92,
     };
     currentScene().darknessZones.push(zone);
     state.ui.selectedTokenId = null;
@@ -2443,11 +2715,12 @@ async function handleMapUpload(event) {
   try {
     const dataUrl = await fileToDataUrl(file);
     state.library.maps.push({ id: makeId("map"), name: file.name, dataUrl });
-    const map = state.library.maps[state.library.maps.length - 1];
-    currentScene().mapAssetId = map.id;
-    saveState();
-    renderAll();
-    showToast("Mapa importado. Os tokens desta cena foram preservados.");
+   const map = state.library.maps[state.library.maps.length - 1];
+   currentScene().mapAssetId = map.id;
+   saveState();
+   renderAll();
+    await analyzeMapLighting({ announce: false });
+    showToast("Mapa importado e analisado. Os tokens desta cena foram preservados.");
   } catch (error) {
     showToast(error.message || "Não foi possível importar o mapa.", true);
   }
@@ -2517,9 +2790,11 @@ async function handleSequenceSubmit(event) {
 function setMap(mapId) {
   if (currentRole() !== "gm") return;
   if (!state.library.maps.some((map) => map.id === mapId)) return;
-  currentScene().mapAssetId = mapId;
+ const scene = currentScene();
+ scene.mapAssetId = mapId;
   saveState();
   renderAll();
+ if (!currentMapAnalysis()) analyzeMapLighting({ announce: false });
   showToast("Mapa trocado; tokens e estados da cena continuam intactos.");
 }
 
@@ -2527,9 +2802,10 @@ function createScene() {
   if (currentRole() !== "gm") return;
   const name = window.prompt("Nome da nova cena", `Cena ${state.scenes.length + 1}`)?.trim();
   if (!name) return;
-  const scene = {
-    id: makeId("scene"), name, mapAssetId: null, camera: { x: 0, y: 0, zoom: 1 }, globalIllumination: false, visionMaskEnabled: true, darknessOpacity: 0.82,
+ const scene = {
+   id: makeId("scene"), name, mapAssetId: null, camera: { x: 0, y: 0, zoom: 1 }, globalIllumination: false, visionMaskEnabled: true, darknessOpacity: 0.82,
     tokens: [], walls: [], lights: [], darknessZones: [], hotspots: [],
+   mapAnalysis: null,
   };
   state.scenes.push(scene);
   state.activeSceneId = scene.id;
@@ -2738,14 +3014,18 @@ function init() {
     renderLighting();
     saveState();
   });
+ els.analyzeMapLighting.addEventListener("click", () => analyzeMapLighting());
+ els.createSuggestedLights.addEventListener("click", createSuggestedLights);
+ els.clearMapAnalysis.addEventListener("click", clearMapAnalysis);
   els.newLightColor.addEventListener("input", () => {
-    if (currentRole() !== "gm") return;
-    state.ui.newLightColor = normalizeHexColor(els.newLightColor.value);
-    updateLightPresetStyles();
-    saveState();
-  });
+   if (currentRole() !== "gm") return;
+   state.ui.newLightColor = normalizeHexColor(els.newLightColor.value);
+   updateLightPresetStyles();
+   saveState();
+ });
   els.inspectorContent.addEventListener("input", handleLightControl);
   els.inspectorContent.addEventListener("input", handleDarknessControl);
+ els.inspectorContent.addEventListener("input", handleTokenControl);
   $$('[data-permission]').forEach((input) => input.addEventListener("change", () => {
     if (currentRole() !== "gm") return;
     state.permissions[input.dataset.permission] = input.checked;
@@ -2778,8 +3058,9 @@ function init() {
   els.nextFrame.addEventListener("click", () => advanceSequence(1));
   document.addEventListener("click", handleDelegatedClick);
   document.addEventListener("keydown", handleKeydown);
-  document.addEventListener("keyup", handleKeyup);
-  window.addEventListener("resize", renderLighting);
+ document.addEventListener("keyup", handleKeyup);
+  els.mapImage.addEventListener("load", renderLighting);
+ window.addEventListener("resize", renderLighting);
   if (window.ResizeObserver) new ResizeObserver(renderLighting).observe(els.stage);
   renderAll();
 }
