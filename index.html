@@ -9,7 +9,7 @@
       content="Beta de um tabletop web para RPG com cenas, tokens, permissões, luz e animações temporárias."
     />
     <title>Tabletop RPG — Beta</title>
-    <link rel="stylesheet" href="styles.css?v=9" />
+    <link rel="stylesheet" href="styles.css?v=10" />
   </head>
   <body data-role="gm">
     <div class="app-shell">
@@ -174,6 +174,11 @@
               <span class="switch-ui"></span>
             </label>
             <label class="switch-row permission-row">
+              <span><strong>Usar ataques do próprio token</strong><small>Permite escolher ações e atingir outros tokens.</small></span>
+              <input type="checkbox" data-permission="useTokenAttacks" checked />
+              <span class="switch-ui"></span>
+            </label>
+            <label class="switch-row permission-row">
               <span><strong>Pings e medição</strong><small>Ferramentas sociais do canvas.</small></span>
               <input type="checkbox" data-permission="pingAndMeasure" checked />
               <span class="switch-ui"></span>
@@ -222,6 +227,7 @@
                 <div id="darknessLayer" class="darkness-layer"></div>
                 <div id="lightsLayer" class="lights-layer"></div>
                 <div id="hotspotsLayer" class="hotspots-layer"></div>
+                <svg id="attackLayer" class="attack-layer" viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true"></svg>
                 <div id="tokensLayer" class="tokens-layer"></div>
                 <div class="wall-draft" id="wallDraft" hidden></div>
                 <div class="darkness-draft" id="darknessDraft" hidden></div>
@@ -333,6 +339,6 @@
     </dialog>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="app.js?v=9" defer></script>
+    <script src="app.js?v=10" defer></script>
   </body>
 </html>
