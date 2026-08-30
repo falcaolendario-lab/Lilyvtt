@@ -24,6 +24,10 @@ const els = {
   sideTabs: $$(".side-tab"),
   sidePanels: $$(".side-panel"),
   toolButtons: $$("[data-tool]"),
+  toggleLeftPanel: $("#toggleLeftPanel"),
+  toggleRightPanel: $("#toggleRightPanel"),
+  closeLeftPanel: $("#closeLeftPanel"),
+  closeRightPanel: $("#closeRightPanel"),
   stage: $("#stage"),
   sceneViewport: $("#sceneViewport"),
   mapImage: $("#mapImage"),
@@ -159,6 +163,7 @@ function initialState() {
       role: initialRole,
       activeTool: "select",
       selectedTokenId: null,
+      panels: { leftOpen: false, rightOpen: false },
     },
   };
 }
@@ -278,7 +283,11 @@ function normalizeState(value) {
       sequences: Array.isArray(loaded.library?.sequences) ? loaded.library.sequences : base.library.sequences,
     },
     scenes: Array.isArray(loaded.scenes) && loaded.scenes.length ? loaded.scenes : base.scenes,
-    ui: { ...base.ui, ...(loaded.ui || {}) },
+    ui: {
+      ...base.ui,
+      ...(loaded.ui || {}),
+      panels: { ...base.ui.panels, ...(loaded.ui?.panels || {}) },
+    },
   };
 
   normalized.scenes = normalized.scenes.map((scene) => ({
@@ -389,8 +398,36 @@ function renderShell() {
   els.roomName.textContent = state.room.name;
   els.sceneChip.textContent = scene.name.toUpperCase();
   els.roleButtons.forEach((button) => button.classList.toggle("active", button.dataset.roleChoice === role));
+  renderPanels();
   if (role === "player") {
     els.toolStatus.textContent = "Modo Player · mova apenas o que for permitido";
+  }
+}
+
+function renderPanels() {
+  const isGm = currentRole() === "gm";
+  const panels = state.ui.panels || { leftOpen: false, rightOpen: false };
+  const leftOpen = isGm && panels.leftOpen === true;
+  const rightOpen = isGm && panels.rightOpen === true;
+  els.body.classList.toggle("panel-left-closed", !leftOpen);
+  els.body.classList.toggle("panel-right-closed", !rightOpen);
+
+  [els.toggleLeftPanel, els.toggleRightPanel].forEach((button) => {
+    if (button) button.hidden = !isGm;
+  });
+  if (els.toggleLeftPanel) {
+    els.toggleLeftPanel.setAttribute("aria-expanded", String(leftOpen));
+    els.toggleLeftPanel.setAttribute("aria-label", leftOpen ? "Fechar Biblioteca" : "Abrir Biblioteca");
+    els.toggleLeftPanel.title = leftOpen ? "Fechar Biblioteca" : "Abrir Biblioteca";
+    const label = els.toggleLeftPanel.querySelector("em");
+    if (label) label.textContent = leftOpen ? "Fechar" : "Biblioteca";
+  }
+  if (els.toggleRightPanel) {
+    els.toggleRightPanel.setAttribute("aria-expanded", String(rightOpen));
+    els.toggleRightPanel.setAttribute("aria-label", rightOpen ? "Fechar Inspector" : "Abrir Inspector");
+    els.toggleRightPanel.title = rightOpen ? "Fechar Inspector" : "Abrir Inspector";
+    const label = els.toggleRightPanel.querySelector("em");
+    if (label) label.textContent = rightOpen ? "Fechar" : "Inspector";
   }
 }
 
@@ -989,6 +1026,23 @@ function clearSelection() {
   renderInspector();
 }
 
+function togglePanel(panel) {
+  if (currentRole() !== "gm") return;
+  if (!state.ui.panels) state.ui.panels = { leftOpen: false, rightOpen: false };
+  if (!(panel in state.ui.panels)) return;
+  state.ui.panels[panel] = !state.ui.panels[panel];
+  saveState();
+  renderAll();
+}
+
+function closePanel(panel) {
+  if (currentRole() !== "gm") return;
+  if (!state.ui.panels) state.ui.panels = { leftOpen: false, rightOpen: false };
+  state.ui.panels[panel] = false;
+  saveState();
+  renderAll();
+}
+
 function setTool(tool) {
   if (currentRole() !== "gm") return;
   state.ui.activeTool = tool;
@@ -1372,6 +1426,10 @@ function init() {
     els.sidePanels.forEach((panel) => panel.classList.toggle("active", panel.id === tab.dataset.panel));
   }));
   els.toolButtons.forEach((button) => button.addEventListener("click", () => setTool(button.dataset.tool)));
+  els.toggleLeftPanel.addEventListener("click", () => togglePanel("leftOpen"));
+  els.toggleRightPanel.addEventListener("click", () => togglePanel("rightOpen"));
+  els.closeLeftPanel.addEventListener("click", () => closePanel("leftOpen"));
+  els.closeRightPanel.addEventListener("click", () => closePanel("rightOpen"));
   els.stage.addEventListener("pointerdown", handleStagePanStart);
   els.stage.addEventListener("wheel", handleStageWheel, { passive: false });
   els.stage.addEventListener("click", handleStageClick);
