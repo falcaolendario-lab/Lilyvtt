@@ -15,7 +15,7 @@ Protótipo de um VTT leve com foco em uma experiência simples como uma mesa com
 - câmera com arraste do fundo, zoom pela roda do mouse e botão de centralizar;
 - barreiras desenhadas no canvas;
 - colisão básica de movimento;
-- máscara de visão com luz e barreiras;
+- máscara de visão com luz suave e barreiras;
 - hotspots narrativos;
 - sequências com imagens e frases;
 - armazenamento local para preservar as preparações do Mestre.
