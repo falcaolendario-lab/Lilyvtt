@@ -4,12 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#0b1118" />
+    <meta name="lily-server-url" content="" />
     <meta
       name="description"
       content="Beta de um tabletop web para RPG com cenas, tokens, permissões, luz e animações temporárias."
     />
     <title>Tabletop RPG — Beta</title>
-    <link rel="stylesheet" href="styles.css?v=14" />
+    <link rel="stylesheet" href="styles.css?v=15" />
   </head>
   <body data-role="gm">
     <div class="app-shell">
@@ -30,6 +31,7 @@
 
         <div class="top-actions">
           <span class="save-indicator" id="saveIndicator"><span class="status-dot"></span> salvo localmente</span>
+          <span class="connection-status offline" id="connectionStatus" title="Estado da sala online">somente local</span>
           <button class="quiet-button gm-only" id="shareRoom">Compartilhar player</button>
           <div class="role-switch" aria-label="Escolher modo de visualização">
             <button class="role-button active" id="roleGm" data-role-choice="gm">Mestre</button>
@@ -40,7 +42,7 @@
 
       <div class="beta-strip gm-only" id="betaStrip">
         <span class="beta-pulse"></span>
-        <span><strong>Beta local.</strong> O link de Player funciona na prévia local e acompanha abas do mesmo navegador; a sincronização entre dispositivos entra na sala online.</span>
+        <span><strong>Beta.</strong> A sala online sincroniza mapa, tokens, luzes e escuridão; sem servidor configurado, o tabletop continua funcionando localmente.</span>
         <button class="strip-close" id="closeBetaStrip" aria-label="Fechar aviso">×</button>
       </div>
 
@@ -347,6 +349,6 @@
     </dialog>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="app.js?v=14" defer></script>
+    <script src="app.js?v=15" defer></script>
   </body>
 </html>
