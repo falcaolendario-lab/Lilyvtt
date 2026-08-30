@@ -26,6 +26,7 @@ const els = {
   toolButtons: $$("[data-tool]"),
   toggleLeftPanel: $("#toggleLeftPanel"),
   toggleRightPanel: $("#toggleRightPanel"),
+  toggleLightingPreview: $("#toggleLightingPreview"),
   closeLeftPanel: $("#closeLeftPanel"),
   closeRightPanel: $("#closeRightPanel"),
   stage: $("#stage"),
@@ -34,10 +35,12 @@ const els = {
   mapPlaceholder: $("#mapPlaceholder"),
   wallsLayer: $("#wallsLayer"),
   lightingCanvas: $("#lightingCanvas"),
+  darknessLayer: $("#darknessLayer"),
   lightsLayer: $("#lightsLayer"),
   hotspotsLayer: $("#hotspotsLayer"),
   tokensLayer: $("#tokensLayer"),
   wallDraft: $("#wallDraft"),
+  darknessDraft: $("#darknessDraft"),
   stageHint: $("#stageHint"),
   sceneChip: $("#sceneChip"),
   toolStatus: $("#toolStatus"),
@@ -52,6 +55,9 @@ const els = {
   sceneName: $("#sceneName"),
   globalIllumination: $("#globalIllumination"),
   visionMask: $("#visionMask"),
+  gmLightingPreview: $("#gmLightingPreview"),
+  darknessOpacity: $("#darknessOpacity"),
+  darknessOpacityValue: $("#darknessOpacityValue"),
   selectionAvatar: $("#selectionAvatar"),
   selectionName: $("#selectionName"),
   selectionDetail: $("#selectionDetail"),
@@ -94,6 +100,9 @@ let sequencePlayback = null;
 let wallDraftPoint = null;
 let activeDrag = null;
 let activePan = null;
+let activeLightDrag = null;
+let activeDarknessDrag = null;
+let activeDarknessDraw = null;
 let suppressStageClick = false;
 let spaceHeld = false;
 let cameraSaveTimer = null;
@@ -152,10 +161,12 @@ function initialState() {
         mapAssetId: null,
         globalIllumination: false,
         visionMaskEnabled: true,
+        darknessOpacity: 0.82,
         camera: { x: 0, y: 0, zoom: 1 },
         tokens: [],
         walls: [],
         lights: [],
+        darknessZones: [],
         hotspots: [],
       },
     ],
@@ -164,6 +175,9 @@ function initialState() {
       role: initialRole,
       activeTool: "select",
       selectedTokenId: null,
+      selectedLightId: null,
+      selectedDarknessId: null,
+      gmLightingPreview: true,
       panels: { leftOpen: false, rightOpen: false },
     },
   };
@@ -261,9 +275,34 @@ function normalizeLights(lights) {
       ...point,
       radius: clamp(Number(light.radius) || 0.2, 0.02, 2),
       falloff: clamp(Number(light.falloff) || 0.72, 0.2, 0.95),
+      intensity: clamp(Number(light.intensity) || 1, 0.05, 1.5),
       color: String(light.color || "#f4c783"),
+      providesVision: light.providesVision !== false,
     });
     return normalizedLights;
+  }, []);
+}
+
+function normalizeDarknessZones(zones) {
+  const seenIds = new Set();
+  return zones.reduce((normalizedZones, zone) => {
+    if (!zone || typeof zone !== "object") return normalizedZones;
+    let id = String(zone.id || makeId("darkness"));
+    if (seenIds.has(id)) id = makeId("darkness");
+    seenIds.add(id);
+    const point = normalizePoint(zone);
+    const width = clamp(Number(zone.width) || 0.18, 0.02, 0.98);
+    const height = clamp(Number(zone.height) || 0.16, 0.02, 0.98);
+    normalizedZones.push({
+      ...zone,
+      id,
+      x: clamp(point.x, 0.01, Math.max(0.01, 0.99 - width)),
+      y: clamp(point.y, 0.01, Math.max(0.01, 0.99 - height)),
+      width,
+      height,
+      opacity: clamp(Number(zone.opacity) || 0.82, 0.1, 1),
+    });
+    return normalizedZones;
   }, []);
 }
 
@@ -298,11 +337,13 @@ function normalizeState(value) {
       .filter((token) => token?.id !== "token-example-player" && token?.id !== "token-example-gm")),
     walls: normalizeWalls(Array.isArray(scene.walls) ? scene.walls : []),
     lights: normalizeLights(Array.isArray(scene.lights) ? scene.lights : []),
+    darknessZones: normalizeDarknessZones(Array.isArray(scene.darknessZones) ? scene.darknessZones : []),
     hotspots: (Array.isArray(scene.hotspots) ? scene.hotspots : [])
       .filter((hotspot) => hotspot?.id !== "hotspot-example")
       .map((hotspot) => ({ ...hotspot, ...normalizePoint(hotspot), visible: hotspot.visible !== false })),
     globalIllumination: Boolean(scene.globalIllumination),
     visionMaskEnabled: scene.visionMaskEnabled !== false,
+    darknessOpacity: Number.isFinite(Number(scene.darknessOpacity)) ? clamp(Number(scene.darknessOpacity), 0, 0.98) : 0.82,
   }));
 
   normalized.schemaVersion = STATE_SCHEMA_VERSION;
@@ -358,6 +399,18 @@ function getToken(tokenId) {
 
 function getSequence(sequenceId) {
   return state.library.sequences.find((sequence) => sequence.id === sequenceId);
+}
+
+function getLight(lightId) {
+  return currentScene().lights.find((light) => light.id === lightId);
+}
+
+function getDarknessZone(zoneId) {
+  return currentScene().darknessZones.find((zone) => zone.id === zoneId);
+}
+
+function isLightingPreviewActive() {
+  return currentRole() === "player" || (currentRole() === "gm" && state.ui.gmLightingPreview !== false);
 }
 
 function getTokenImage(token) {
@@ -480,6 +533,10 @@ function renderSidebar() {
   els.sceneName.value = currentScene().name;
   els.globalIllumination.checked = Boolean(currentScene().globalIllumination);
   els.visionMask.checked = currentScene().visionMaskEnabled !== false;
+  const darknessOpacity = Math.round((currentScene().darknessOpacity ?? 0.82) * 100);
+  els.gmLightingPreview.checked = state.ui.gmLightingPreview !== false;
+  els.darknessOpacity.value = String(darknessOpacity);
+  els.darknessOpacityValue.textContent = `${darknessOpacity}%`;
   $$('[data-permission]').forEach((input) => {
     input.checked = Boolean(state.permissions[input.dataset.permission]);
   });
@@ -489,11 +546,20 @@ function renderToolbar() {
   const tool = state.ui.activeTool;
   els.stage.dataset.tool = tool;
   els.toolButtons.forEach((button) => button.classList.toggle("active", button.dataset.tool === tool));
+  if (els.toggleLightingPreview) {
+    const enabled = currentRole() === "gm" && state.ui.gmLightingPreview !== false;
+    els.toggleLightingPreview.classList.toggle("active", enabled);
+    els.toggleLightingPreview.setAttribute("aria-pressed", String(enabled));
+    els.toggleLightingPreview.title = enabled ? "Desligar prévia da visão dos Players" : "Ligar prévia da visão dos Players";
+    const label = els.toggleLightingPreview.querySelector("em");
+    if (label) label.textContent = enabled ? "Visão Player" : "Visão livre";
+  }
   if (currentRole() === "gm") {
     const messages = {
       select: "Arraste o fundo para mover · roda para zoom",
       wall: wallDraftPoint ? "Escolha o segundo ponto da barreira" : "Clique em dois pontos para desenhar uma barreira",
       light: "Clique no mapa para adicionar uma luz",
+      darkness: "Arraste no mapa para criar uma área escura · clique para uma área padrão",
       hotspot: "Clique no mapa para criar uma sequência narrativa",
     };
     els.toolStatus.textContent = messages[tool] || messages.select;
@@ -522,9 +588,12 @@ function renderCanvasObjects() {
   els.wallsLayer.innerHTML = scene.walls.map((wall) => `
     <line x1="${wall.a.x}" y1="${wall.a.y}" x2="${wall.b.x}" y2="${wall.b.y}" />`).join("");
 
+  els.darknessLayer.innerHTML = scene.darknessZones.map((zone) => `
+    <div class="darkness-zone ${state.ui.selectedDarknessId === zone.id ? "selected" : ""}" data-darkness-id="${escapeHtml(zone.id)}" style="left:${zone.x * 100}%;top:${zone.y * 100}%;width:${zone.width * 100}%;height:${zone.height * 100}%;--darkness-opacity:${zone.opacity}" title="Área escura · arraste para mover" role="button" tabindex="0" aria-label="Área escura"></div>`).join("");
+
   els.lightsLayer.innerHTML = currentRole() === "gm"
     ? scene.lights.map((light) => `
-      <div class="light-marker" style="left:${light.x * 100}%;top:${light.y * 100}%;--light-color:${escapeHtml(light.color || "#f4c783")}" title="Luz"></div>`).join("")
+      <button class="light-marker ${state.ui.selectedLightId === light.id ? "selected" : ""}" data-light-id="${escapeHtml(light.id)}" style="left:${light.x * 100}%;top:${light.y * 100}%;--light-color:${escapeHtml(light.color || "#f4c783")}" title="Luz · arraste para mover" aria-label="Luz, arraste para mover"><span>✦</span></button>`).join("")
     : "";
 
   els.hotspotsLayer.innerHTML = scene.hotspots.filter((hotspot) => hotspot.visible !== false).map((hotspot) => {
@@ -552,10 +621,31 @@ function renderCanvasObjects() {
     els.wallDraft.style.left = `${wallDraftPoint.x * 100}%`;
     els.wallDraft.style.top = `${wallDraftPoint.y * 100}%`;
   }
+  els.darknessDraft.hidden = !activeDarknessDraw;
   bindTokenInteractions();
+  bindLightInteractions();
+  bindDarknessInteractions();
 }
 
 function renderFooter() {
+  const selectedLight = state.ui.selectedLightId ? getLight(state.ui.selectedLightId) : null;
+  if (selectedLight) {
+    els.selectionAvatar.textContent = "✦";
+    els.selectionName.textContent = "Luz selecionada";
+    els.selectionDetail.textContent = `${Math.round(selectedLight.radius * 100)}% de alcance · arraste para mover · Delete para excluir`;
+    els.hotkeyStrip.innerHTML = '<span class="eyebrow">LUZ</span><span class="hotkey-placeholder">Abra o Inspector para ajustar alcance, cor e intensidade</span>';
+    return;
+  }
+
+  const selectedDarkness = state.ui.selectedDarknessId ? getDarknessZone(state.ui.selectedDarknessId) : null;
+  if (selectedDarkness) {
+    els.selectionAvatar.textContent = "◼";
+    els.selectionName.textContent = "Área escura selecionada";
+    els.selectionDetail.textContent = `${Math.round(selectedDarkness.opacity * 100)}% de opacidade · arraste para mover · Delete para excluir`;
+    els.hotkeyStrip.innerHTML = '<span class="eyebrow">ESCURIDÃO</span><span class="hotkey-placeholder">Abra o Inspector para ajustar opacidade</span>';
+    return;
+  }
+
   const token = state.ui.selectedTokenId ? getToken(state.ui.selectedTokenId) : null;
   if (!token) {
     els.selectionAvatar.textContent = "—";
@@ -576,6 +666,53 @@ function renderFooter() {
 }
 
 function renderInspector() {
+  const light = currentRole() === "gm" && state.ui.selectedLightId ? getLight(state.ui.selectedLightId) : null;
+  if (light) {
+    els.inspectorTitle.textContent = "Fonte de luz";
+    els.inspectorContent.innerHTML = `
+      <div class="inspector-card">
+        <div class="eyebrow">LIGHT SOURCE</div>
+        <div class="inspector-title">Luz selecionada</div>
+        <div class="inspector-meta">Arraste o marcador no mapa para reposicionar. As paredes bloqueiam esta luz durante o cálculo.</div>
+        <label class="range-row inspector-range">
+          <span><strong>Alcance</strong><output data-light-output="radius">${Math.round(light.radius * 100)}%</output></span>
+          <input type="range" min="0.03" max="1.2" step="0.01" value="${light.radius}" data-light-control="radius" />
+        </label>
+        <label class="range-row inspector-range">
+          <span><strong>Intensidade</strong><output data-light-output="intensity">${Math.round((light.intensity || 1) * 100)}%</output></span>
+          <input type="range" min="0.1" max="1.5" step="0.05" value="${light.intensity || 1}" data-light-control="intensity" />
+        </label>
+        <label class="range-row inspector-range">
+          <span><strong>Suavidade</strong><output data-light-output="falloff">${Math.round((light.falloff || 0.72) * 100)}%</output></span>
+          <input type="range" min="0.2" max="0.95" step="0.01" value="${light.falloff || 0.72}" data-light-control="falloff" />
+        </label>
+        <label class="color-row"><span><strong>Cor da luz</strong><small>A cor também aparece no halo.</small></span><input class="color-input" type="color" value="${escapeHtml(light.color || "#f4c783")}" data-light-control="color" /></label>
+        <button class="quiet-button full-width delete-button" data-action="delete-light" data-id="${escapeHtml(light.id)}">Excluir luz</button>
+      </div>`;
+    return;
+  }
+
+  const darkness = currentRole() === "gm" && state.ui.selectedDarknessId ? getDarknessZone(state.ui.selectedDarknessId) : null;
+  if (darkness) {
+    els.inspectorTitle.textContent = "Área escura";
+    els.inspectorContent.innerHTML = `
+      <div class="inspector-card">
+        <div class="eyebrow">DARKNESS ZONE</div>
+        <div class="inspector-title">Área escura selecionada</div>
+        <div class="inspector-meta">Arraste a área no mapa para reposicionar. Ela fica por cima da iluminação e cria um bloqueio visual local.</div>
+        <div class="permission-summary">
+          <div><span>Tamanho</span><b>${Math.round(darkness.width * 100)}% × ${Math.round(darkness.height * 100)}%</b></div>
+          <div><span>Posição</span><b>${Math.round(darkness.x * 100)}% / ${Math.round(darkness.y * 100)}%</b></div>
+        </div>
+        <label class="range-row inspector-range">
+          <span><strong>Opacidade</strong><output data-darkness-output="opacity">${Math.round(darkness.opacity * 100)}%</output></span>
+          <input type="range" min="0.1" max="1" step="0.01" value="${darkness.opacity}" data-darkness-control="opacity" />
+        </label>
+        <button class="quiet-button full-width delete-button" data-action="delete-darkness" data-id="${escapeHtml(darkness.id)}">Excluir área escura</button>
+      </div>`;
+    return;
+  }
+
   const token = state.ui.selectedTokenId ? getToken(state.ui.selectedTokenId) : null;
   if (token) {
     const blueprint = getBlueprint(token.blueprintId) || { name: "Token", images: [] };
@@ -622,7 +759,7 @@ function renderInspector() {
       <div class="inspector-card">
         <div class="eyebrow">SCENE STATUS</div>
         <div class="inspector-title">${escapeHtml(scene.name)}</div>
-        <div class="inspector-meta">${scene.walls.length} barreiras · ${scene.lights.length} luzes · ${scene.hotspots.length} hotspots</div>
+        <div class="inspector-meta">${scene.walls.length} barreiras · ${scene.lights.length} luzes · ${scene.darknessZones.length} áreas escuras · ${scene.hotspots.length} hotspots</div>
       </div>`
     : `
       <div class="inspector-card">
@@ -653,31 +790,37 @@ function renderLighting() {
   context.clearRect(0, 0, width, height);
 
   const scene = currentScene();
-  const shouldMask = currentRole() === "player" && scene.visionMaskEnabled !== false && !scene.globalIllumination;
+  const ambientOpacity = clamp(Number.isFinite(Number(scene.darknessOpacity)) ? Number(scene.darknessOpacity) : 0.82, 0, 0.98);
+  const shouldMask = isLightingPreviewActive() && scene.visionMaskEnabled !== false && !scene.globalIllumination && ambientOpacity > 0.001;
   if (!shouldMask) {
     canvas.hidden = true;
     return;
   }
   canvas.hidden = false;
   context.globalCompositeOperation = "source-over";
-  context.fillStyle = "rgba(4, 7, 12, 0.94)";
+  context.fillStyle = `rgba(4, 7, 12, ${ambientOpacity})`;
   context.fillRect(0, 0, width, height);
 
   const sources = [];
   scene.tokens
-    .filter((token) => token.ownerId === currentMemberId() && Number(token.visionRange) > 0)
+    .filter((token) => {
+      const isVisibleOwner = currentRole() === "player" ? token.ownerId === currentMemberId() : token.ownerId !== "gm";
+      return isVisibleOwner && Number(token.visionRange) > 0;
+    })
     .forEach((token) => sources.push({
       x: token.x,
       y: token.y,
       range: token.visionRange,
       falloff: 0.58,
+      intensity: 1,
       kind: "vision",
     }));
-  scene.lights.forEach((light) => sources.push({
+  scene.lights.filter((light) => light.providesVision !== false).forEach((light) => sources.push({
     x: light.x,
     y: light.y,
     range: light.radius,
     falloff: Number(light.falloff) || 0.72,
+    intensity: Number(light.intensity) || 1,
     color: light.color || "#f4c783",
     kind: "light",
   }));
@@ -690,6 +833,7 @@ function renderLighting() {
     const radius = source.range * Math.min(width, height);
     const falloff = clamp(Number(source.falloff) || 0.7, 0.2, 0.95);
     const fullLightStop = clamp(1 - falloff, 0.2, 0.82);
+    const intensity = source.kind === "vision" ? 1 : clamp(Number(source.intensity) || 1, 0.1, 1.5);
     context.save();
     context.beginPath();
     points.forEach((point, index) => {
@@ -706,15 +850,17 @@ function renderLighting() {
     gradient.addColorStop(Math.min(0.94, fullLightStop + falloff * 0.7), "rgba(0,0,0,0.72)");
     gradient.addColorStop(1, "rgba(0,0,0,0)");
     context.globalCompositeOperation = "destination-out";
+    context.globalAlpha = Math.min(1, intensity);
     context.fillStyle = gradient;
     context.fillRect(0, 0, width, height);
 
     if (source.kind === "light") {
       const color = hexToRgb(source.color);
       const glow = context.createRadialGradient(sourceX, sourceY, 0, sourceX, sourceY, Math.max(1, radius * 0.78));
-      glow.addColorStop(0, `rgba(${color.r}, ${color.g}, ${color.b}, 0.16)`);
-      glow.addColorStop(0.42, `rgba(${color.r}, ${color.g}, ${color.b}, 0.07)`);
+      glow.addColorStop(0, `rgba(${color.r}, ${color.g}, ${color.b}, ${0.2 * Math.min(1, intensity)})`);
+      glow.addColorStop(0.42, `rgba(${color.r}, ${color.g}, ${color.b}, ${0.08 * Math.min(1, intensity)})`);
       glow.addColorStop(1, `rgba(${color.r}, ${color.g}, ${color.b}, 0)`);
+      context.globalAlpha = 1;
       context.globalCompositeOperation = "source-over";
       context.fillStyle = glow;
       context.fillRect(0, 0, width, height);
@@ -845,7 +991,7 @@ function handleStagePanStart(event) {
   if (![0, 1].includes(event.button)) return;
   const primaryPanAllowed = currentRole() === "player" || state.ui.activeTool === "select";
   if (event.button === 0 && !spaceHeld && !primaryPanAllowed) return;
-  if (event.target.closest(".token") || event.target.closest(".hotspot")) return;
+  if (!spaceHeld && event.target.closest(".token, .hotspot, .light-marker, .darkness-zone, .darkness-draft")) return;
   const camera = currentCamera();
   activePan = {
     pointerId: event.pointerId,
@@ -935,6 +1081,18 @@ function updateSelectedTokenStyles() {
   });
 }
 
+function updateLightSelectionStyles() {
+  $$(".light-marker").forEach((element) => {
+    element.classList.toggle("selected", element.dataset.lightId === state.ui.selectedLightId);
+  });
+}
+
+function updateDarknessSelectionStyles() {
+  $$(".darkness-zone").forEach((element) => {
+    element.classList.toggle("selected", element.dataset.darknessId === state.ui.selectedDarknessId);
+  });
+}
+
 function bindTokenInteractions() {
   $$(".token").forEach((element) => {
     element.addEventListener("click", (event) => {
@@ -942,8 +1100,8 @@ function bindTokenInteractions() {
       selectToken(element.dataset.tokenId);
     });
     element.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || spaceHeld) return;
       event.stopPropagation();
-      if (event.button !== 0) return;
       const token = getToken(element.dataset.tokenId);
       if (!token) return;
       selectToken(token.id, { refreshObjects: false });
@@ -971,6 +1129,200 @@ function bindTokenInteractions() {
       }
     });
   });
+}
+
+function bindLightInteractions() {
+  if (currentRole() !== "gm") return;
+  $$(".light-marker").forEach((element) => {
+    element.addEventListener("click", (event) => {
+      event.stopPropagation();
+      selectLight(element.dataset.lightId);
+    });
+    element.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || spaceHeld) return;
+      event.stopPropagation();
+      const light = getLight(element.dataset.lightId);
+      if (!light) return;
+      selectLight(light.id, { refreshObjects: false });
+      const point = clientToNormalized(event);
+      activeLightDrag = {
+        lightId: light.id,
+        element,
+        pointerId: event.pointerId,
+        offsetX: light.x - point.x,
+        offsetY: light.y - point.y,
+        moved: false,
+      };
+      element.setPointerCapture?.(event.pointerId);
+      window.addEventListener("pointermove", handleLightDrag);
+      window.addEventListener("pointerup", finishLightDrag);
+      window.addEventListener("pointercancel", finishLightDrag);
+      event.preventDefault();
+    });
+    element.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        selectLight(element.dataset.lightId);
+      }
+    });
+  });
+}
+
+function handleLightDrag(event) {
+  if (!activeLightDrag || event.pointerId !== activeLightDrag.pointerId) return;
+  const light = getLight(activeLightDrag.lightId);
+  if (!light) return;
+  const point = clientToNormalized(event);
+  light.x = clamp(point.x + activeLightDrag.offsetX, 0.01, 0.99);
+  light.y = clamp(point.y + activeLightDrag.offsetY, 0.01, 0.99);
+  activeLightDrag.element.style.left = `${light.x * 100}%`;
+  activeLightDrag.element.style.top = `${light.y * 100}%`;
+  activeLightDrag.moved = true;
+  renderLighting();
+  event.preventDefault();
+}
+
+function finishLightDrag(event) {
+  if (!activeLightDrag || (event?.pointerId != null && event.pointerId !== activeLightDrag.pointerId)) return;
+  window.removeEventListener("pointermove", handleLightDrag);
+  window.removeEventListener("pointerup", finishLightDrag);
+  window.removeEventListener("pointercancel", finishLightDrag);
+  if (activeLightDrag.moved) {
+    saveState();
+    renderFooter();
+    renderInspector();
+  }
+  activeLightDrag = null;
+}
+
+function bindDarknessInteractions() {
+  if (currentRole() !== "gm") return;
+  $$(".darkness-zone").forEach((element) => {
+    element.addEventListener("click", (event) => {
+      event.stopPropagation();
+      selectDarkness(element.dataset.darknessId);
+    });
+    element.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || spaceHeld) return;
+      event.stopPropagation();
+      const zone = getDarknessZone(element.dataset.darknessId);
+      if (!zone) return;
+      selectDarkness(zone.id, { refreshObjects: false });
+      const point = clientToNormalized(event);
+      activeDarknessDrag = {
+        zoneId: zone.id,
+        element,
+        pointerId: event.pointerId,
+        offsetX: zone.x - point.x,
+        offsetY: zone.y - point.y,
+        moved: false,
+      };
+      element.setPointerCapture?.(event.pointerId);
+      window.addEventListener("pointermove", handleDarknessDrag);
+      window.addEventListener("pointerup", finishDarknessDrag);
+      window.addEventListener("pointercancel", finishDarknessDrag);
+      event.preventDefault();
+    });
+    element.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        selectDarkness(element.dataset.darknessId);
+      }
+    });
+  });
+}
+
+function handleDarknessDrag(event) {
+  if (!activeDarknessDrag || event.pointerId !== activeDarknessDrag.pointerId) return;
+  const zone = getDarknessZone(activeDarknessDrag.zoneId);
+  if (!zone) return;
+  const point = clientToNormalized(event);
+  zone.x = clamp(point.x + activeDarknessDrag.offsetX, 0.01, Math.max(0.01, 0.99 - zone.width));
+  zone.y = clamp(point.y + activeDarknessDrag.offsetY, 0.01, Math.max(0.01, 0.99 - zone.height));
+  activeDarknessDrag.element.style.left = `${zone.x * 100}%`;
+  activeDarknessDrag.element.style.top = `${zone.y * 100}%`;
+  activeDarknessDrag.moved = true;
+  event.preventDefault();
+}
+
+function finishDarknessDrag(event) {
+  if (!activeDarknessDrag || (event?.pointerId != null && event.pointerId !== activeDarknessDrag.pointerId)) return;
+  window.removeEventListener("pointermove", handleDarknessDrag);
+  window.removeEventListener("pointerup", finishDarknessDrag);
+  window.removeEventListener("pointercancel", finishDarknessDrag);
+  if (activeDarknessDrag.moved) {
+    saveState();
+    renderFooter();
+    renderInspector();
+  }
+  activeDarknessDrag = null;
+}
+
+function renderDarknessDraft(start, end) {
+  if (!els.darknessDraft) return;
+  const x = Math.min(start.x, end.x);
+  const y = Math.min(start.y, end.y);
+  const width = Math.abs(end.x - start.x);
+  const height = Math.abs(end.y - start.y);
+  els.darknessDraft.hidden = false;
+  els.darknessDraft.style.left = `${x * 100}%`;
+  els.darknessDraft.style.top = `${y * 100}%`;
+  els.darknessDraft.style.width = `${width * 100}%`;
+  els.darknessDraft.style.height = `${height * 100}%`;
+}
+
+function handleDarknessDrawStart(event) {
+  if (currentRole() !== "gm" || state.ui.activeTool !== "darkness" || event.button !== 0 || spaceHeld) return;
+  if (event.target.closest(".token, .hotspot, .light-marker, .darkness-zone")) return;
+  const start = clientToNormalized(event);
+  activeDarknessDraw = { pointerId: event.pointerId, start, end: start };
+  renderDarknessDraft(start, start);
+  els.stage.setPointerCapture?.(event.pointerId);
+  window.addEventListener("pointermove", handleDarknessDrawMove);
+  window.addEventListener("pointerup", finishDarknessDraw);
+  window.addEventListener("pointercancel", finishDarknessDraw);
+  event.preventDefault();
+}
+
+function handleDarknessDrawMove(event) {
+  if (!activeDarknessDraw || event.pointerId !== activeDarknessDraw.pointerId) return;
+  activeDarknessDraw.end = clientToNormalized(event);
+  renderDarknessDraft(activeDarknessDraw.start, activeDarknessDraw.end);
+  event.preventDefault();
+}
+
+function finishDarknessDraw(event) {
+  if (!activeDarknessDraw || (event?.pointerId != null && event.pointerId !== activeDarknessDraw.pointerId)) return;
+  window.removeEventListener("pointermove", handleDarknessDrawMove);
+  window.removeEventListener("pointerup", finishDarknessDraw);
+  window.removeEventListener("pointercancel", finishDarknessDraw);
+  const { start, end } = activeDarknessDraw;
+  let x = Math.min(start.x, end.x);
+  let y = Math.min(start.y, end.y);
+  let width = Math.abs(end.x - start.x);
+  let height = Math.abs(end.y - start.y);
+  if (width < 0.025 || height < 0.025) {
+    width = 0.18;
+    height = 0.16;
+    x = clamp(start.x - width / 2, 0.01, 0.99 - width);
+    y = clamp(start.y - height / 2, 0.01, 0.99 - height);
+  }
+  const zone = {
+    id: makeId("darkness"),
+    x: clamp(x, 0.01, 0.99 - width),
+    y: clamp(y, 0.01, 0.99 - height),
+    width: clamp(width, 0.02, 0.98),
+    height: clamp(height, 0.02, 0.98),
+    opacity: 0.82,
+  };
+  currentScene().darknessZones.push(zone);
+  activeDarknessDraw = null;
+  suppressStageClick = true;
+  saveState();
+  state.ui.selectedLightId = null;
+  state.ui.selectedDarknessId = zone.id;
+  renderAll();
+  showToast("Área escura adicionada. Arraste para mover ou use Delete para excluir.");
 }
 
 function handleTokenDrag(event) {
@@ -1014,17 +1366,117 @@ function finishTokenDrag(event) {
 
 function selectToken(tokenId, options = {}) {
   state.ui.selectedTokenId = tokenId;
+  state.ui.selectedLightId = null;
+  state.ui.selectedDarknessId = null;
   if (options.refreshObjects !== false) renderCanvasObjects();
-  else updateSelectedTokenStyles();
+  else {
+    updateSelectedTokenStyles();
+    updateLightSelectionStyles();
+    updateDarknessSelectionStyles();
+  }
+  renderFooter();
+  renderInspector();
+}
+
+function selectLight(lightId, options = {}) {
+  if (currentRole() !== "gm" || !getLight(lightId)) return;
+  state.ui.selectedTokenId = null;
+  state.ui.selectedLightId = lightId;
+  state.ui.selectedDarknessId = null;
+  if (options.refreshObjects !== false) renderCanvasObjects();
+  else {
+    updateSelectedTokenStyles();
+    updateLightSelectionStyles();
+    updateDarknessSelectionStyles();
+  }
+  renderFooter();
+  renderInspector();
+}
+
+function selectDarkness(zoneId, options = {}) {
+  if (currentRole() !== "gm" || !getDarknessZone(zoneId)) return;
+  state.ui.selectedTokenId = null;
+  state.ui.selectedLightId = null;
+  state.ui.selectedDarknessId = zoneId;
+  if (options.refreshObjects !== false) renderCanvasObjects();
+  else {
+    updateSelectedTokenStyles();
+    updateLightSelectionStyles();
+    updateDarknessSelectionStyles();
+  }
   renderFooter();
   renderInspector();
 }
 
 function clearSelection() {
   state.ui.selectedTokenId = null;
+  state.ui.selectedLightId = null;
+  state.ui.selectedDarknessId = null;
   renderCanvasObjects();
   renderFooter();
   renderInspector();
+}
+
+function deleteLight(lightId = state.ui.selectedLightId) {
+  if (currentRole() !== "gm" || !lightId) return;
+  const scene = currentScene();
+  const index = scene.lights.findIndex((light) => light.id === lightId);
+  if (index < 0) return;
+  scene.lights.splice(index, 1);
+  state.ui.selectedLightId = null;
+  saveState();
+  renderAll();
+  showToast("Luz excluída da cena.");
+}
+
+function deleteDarkness(zoneId = state.ui.selectedDarknessId) {
+  if (currentRole() !== "gm" || !zoneId) return;
+  const scene = currentScene();
+  const index = scene.darknessZones.findIndex((zone) => zone.id === zoneId);
+  if (index < 0) return;
+  scene.darknessZones.splice(index, 1);
+  state.ui.selectedDarknessId = null;
+  saveState();
+  renderAll();
+  showToast("Área escura excluída da cena.");
+}
+
+function toggleLightingPreview() {
+  if (currentRole() !== "gm") return;
+  state.ui.gmLightingPreview = state.ui.gmLightingPreview === false;
+  saveState();
+  renderAll();
+  showToast(state.ui.gmLightingPreview ? "Prévia igual à visão dos Players." : "Prévia desligada; visão livre do Mestre.");
+}
+
+function handleLightControl(event) {
+  if (currentRole() !== "gm") return;
+  const input = event.target.closest("[data-light-control]");
+  if (!input) return;
+  const light = getLight(state.ui.selectedLightId);
+  if (!light) return;
+  const property = input.dataset.lightControl;
+  light[property] = property === "color" ? input.value : Number(input.value);
+  const output = els.inspectorContent.querySelector(`[data-light-output="${property}"]`);
+  if (output) output.textContent = property === "color" ? input.value : `${Math.round(Number(input.value) * 100)}%`;
+  const marker = els.lightsLayer.querySelector(`[data-light-id="${CSS.escape(light.id)}"]`);
+  if (marker && property === "color") marker.style.setProperty("--light-color", light.color);
+  renderLighting();
+  saveState();
+}
+
+function handleDarknessControl(event) {
+  if (currentRole() !== "gm") return;
+  const input = event.target.closest("[data-darkness-control]");
+  if (!input) return;
+  const zone = getDarknessZone(state.ui.selectedDarknessId);
+  if (!zone) return;
+  zone[input.dataset.darknessControl] = Number(input.value);
+  const output = els.inspectorContent.querySelector(`[data-darkness-output="${input.dataset.darknessControl}"]`);
+  if (output) output.textContent = `${Math.round(Number(input.value) * 100)}%`;
+  const element = els.darknessLayer.querySelector(`[data-darkness-id="${CSS.escape(zone.id)}"]`);
+  if (element) element.style.setProperty("--darkness-opacity", zone.opacity);
+  saveState();
 }
 
 function togglePanel(panel) {
@@ -1058,7 +1510,7 @@ function handleStageClick(event) {
     suppressStageClick = false;
     return;
   }
-  if (event.target.closest(".token") || event.target.closest(".hotspot")) return;
+  if (event.target.closest(".token, .hotspot, .light-marker, .darkness-zone")) return;
   if (currentRole() !== "gm") {
     clearSelection();
     return;
@@ -1087,10 +1539,32 @@ function handleStageClick(event) {
     return;
   }
   if (tool === "light") {
-    currentScene().lights.push({ id: makeId("light"), x: point.x, y: point.y, radius: 0.2, falloff: 0.72, color: "#f4c783" });
+    const light = { id: makeId("light"), x: point.x, y: point.y, radius: 0.2, falloff: 0.72, intensity: 1, color: "#f4c783", providesVision: true };
+    currentScene().lights.push(light);
+    state.ui.selectedTokenId = null;
+    state.ui.selectedLightId = light.id;
+    state.ui.selectedDarknessId = null;
     saveState();
     renderAll();
-    showToast("Luz adicionada. Ela será bloqueada pelas barreiras.");
+    showToast("Luz adicionada. Arraste para mover ou use Delete para excluir.");
+    return;
+  }
+  if (tool === "darkness") {
+    const zone = {
+      id: makeId("darkness"),
+      x: clamp(point.x - 0.09, 0.01, 0.81),
+      y: clamp(point.y - 0.08, 0.01, 0.83),
+      width: 0.18,
+      height: 0.16,
+      opacity: 0.82,
+    };
+    currentScene().darknessZones.push(zone);
+    state.ui.selectedTokenId = null;
+    state.ui.selectedLightId = null;
+    state.ui.selectedDarknessId = zone.id;
+    saveState();
+    renderAll();
+    showToast("Área escura adicionada. Arraste para mover ou use Delete para excluir.");
     return;
   }
   if (tool === "hotspot") {
@@ -1362,8 +1836,8 @@ function createScene() {
   const name = window.prompt("Nome da nova cena", `Cena ${state.scenes.length + 1}`)?.trim();
   if (!name) return;
   const scene = {
-    id: makeId("scene"), name, mapAssetId: null, camera: { x: 0, y: 0, zoom: 1 }, globalIllumination: false, visionMaskEnabled: true,
-    tokens: [], walls: [], lights: [], hotspots: [],
+    id: makeId("scene"), name, mapAssetId: null, camera: { x: 0, y: 0, zoom: 1 }, globalIllumination: false, visionMaskEnabled: true, darknessOpacity: 0.82,
+    tokens: [], walls: [], lights: [], darknessZones: [], hotspots: [],
   };
   state.scenes.push(scene);
   state.activeSceneId = scene.id;
@@ -1423,6 +1897,8 @@ function handleDelegatedClick(event) {
   if (actionName === "set-map") setMap(id);
   if (actionName === "add-token") addBlueprintToScene(id);
   if (actionName === "edit-token") openTokenDialog(id);
+  if (actionName === "delete-light") deleteLight(id);
+  if (actionName === "delete-darkness") deleteDarkness(id);
   if (actionName === "select-state") setTokenState(id, action.dataset.stateKey);
   if (actionName === "open-sequence") {
     event.stopPropagation();
@@ -1433,12 +1909,23 @@ function handleDelegatedClick(event) {
 function handleKeydown(event) {
   const tagName = document.activeElement?.tagName;
   if (["INPUT", "TEXTAREA", "SELECT"].includes(tagName)) return;
+  if (currentRole() === "gm" && (event.key === "Delete" || event.key === "Backspace")) {
+    if (state.ui.selectedLightId) deleteLight();
+    else if (state.ui.selectedDarknessId) deleteDarkness();
+    return;
+  }
   if (event.key === " ") {
     spaceHeld = true;
     event.preventDefault();
     return;
   }
   if (event.key === "Escape") {
+    if (activeDarknessDraw) {
+      window.removeEventListener("pointermove", handleDarknessDrawMove);
+      window.removeEventListener("pointerup", finishDarknessDraw);
+      window.removeEventListener("pointercancel", finishDarknessDraw);
+      activeDarknessDraw = null;
+    }
     wallDraftPoint = null;
     state.ui.activeTool = "select";
     renderToolbar();
@@ -1448,6 +1935,7 @@ function handleKeydown(event) {
   if (currentRole() === "gm" && event.key.toLowerCase() === "v") setTool("select");
   if (currentRole() === "gm" && event.key.toLowerCase() === "w") setTool("wall");
   if (currentRole() === "gm" && event.key.toLowerCase() === "l") setTool("light");
+  if (currentRole() === "gm" && event.key.toLowerCase() === "d") setTool("darkness");
   if (currentRole() === "gm" && event.key.toLowerCase() === "h") setTool("hotspot");
   if (/^[1-9]$/.test(event.key) && state.ui.selectedTokenId) setTokenState(state.ui.selectedTokenId, event.key);
 }
@@ -1470,9 +1958,11 @@ function init() {
   els.toolButtons.forEach((button) => button.addEventListener("click", () => setTool(button.dataset.tool)));
   els.toggleLeftPanel.addEventListener("click", () => togglePanel("leftOpen"));
   els.toggleRightPanel.addEventListener("click", () => togglePanel("rightOpen"));
+  els.toggleLightingPreview.addEventListener("click", toggleLightingPreview);
   els.closeLeftPanel.addEventListener("click", () => closePanel("leftOpen"));
   els.closeRightPanel.addEventListener("click", () => closePanel("rightOpen"));
   els.stage.addEventListener("pointerdown", handleStagePanStart);
+  els.stage.addEventListener("pointerdown", handleDarknessDrawStart);
   els.stage.addEventListener("wheel", handleStageWheel, { passive: false });
   els.stage.addEventListener("click", handleStageClick);
   els.stage.addEventListener("contextmenu", (event) => event.preventDefault());
@@ -1504,6 +1994,21 @@ function init() {
     saveState();
     renderAll();
   });
+  els.gmLightingPreview.addEventListener("change", () => {
+    if (currentRole() !== "gm") return;
+    state.ui.gmLightingPreview = els.gmLightingPreview.checked;
+    saveState();
+    renderAll();
+  });
+  els.darknessOpacity.addEventListener("input", () => {
+    if (currentRole() !== "gm") return;
+    currentScene().darknessOpacity = Number(els.darknessOpacity.value) / 100;
+    els.darknessOpacityValue.textContent = `${els.darknessOpacity.value}%`;
+    renderLighting();
+    saveState();
+  });
+  els.inspectorContent.addEventListener("input", handleLightControl);
+  els.inspectorContent.addEventListener("input", handleDarknessControl);
   $$('[data-permission]').forEach((input) => input.addEventListener("change", () => {
     if (currentRole() !== "gm") return;
     state.permissions[input.dataset.permission] = input.checked;
