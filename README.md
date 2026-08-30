@@ -43,6 +43,8 @@ No modo Mestre, selecione um token para mostrar os quatro cantos de redimensiona
 
 ## Sala online
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/falcaolendario-lab/Lilyvtt)
+
 Para testar a sala completa localmente:
 
 ```bash
@@ -53,6 +55,8 @@ npm start
 Depois abra `http://localhost:8787/`. O Mestre cria uma sala online automaticamente e o botão `Compartilhar player` gera um link para outro dispositivo. O servidor salva as salas em `server/data/rooms.json`.
 
 O GitHub Pages continua sendo a versão estática. Para conectá-lo a um servidor publicado, abra o site com `?server=https://URL-DO-SERVICO`; o link de Player gerado pelo Mestre já carregará essa configuração. O `render.yaml` contém a configuração inicial para publicar o servidor como Web Service Node.
+
+O caminho mais simples é clicar no botão acima, aprovar o serviço no Render e abrir a URL `onrender.com` que ele fornecer. Nesse endereço o próprio tabletop e o servidor ficam juntos; o Mestre cria a sala automaticamente e o botão `Compartilhar player` gera o link completo.
 
 O armazenamento JSON é adequado para o beta e para desenvolvimento. Em produção, use disco persistente ou banco externo para não perder salas ao recriar o serviço.
 
