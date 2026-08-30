@@ -13,6 +13,7 @@ Protótipo de um VTT leve com foco em uma experiência simples como uma mesa com
 - tokens pertencentes a jogadores;
 - permissões para mover e editar estados;
 - câmera com arraste do fundo, zoom pela roda do mouse e botão de centralizar;
+- grid quadrado sempre visível, com linhas finas e baixa opacidade;
 - barreiras desenhadas no canvas;
 - colisão básica de movimento;
 - máscara de visão com luz suave e barreiras;
