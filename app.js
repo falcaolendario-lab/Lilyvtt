@@ -9,6 +9,7 @@
  */
 
 const STORAGE_KEY = "tabletop-rpg-beta-state-v1";
+const STATE_SCHEMA_VERSION = 2;
 const PLAYER_ID = "player-1";
 
 const $ = (selector) => document.querySelector(selector);
@@ -24,6 +25,7 @@ const els = {
   sidePanels: $$(".side-panel"),
   toolButtons: $$("[data-tool]"),
   stage: $("#stage"),
+  sceneViewport: $("#sceneViewport"),
   mapImage: $("#mapImage"),
   mapPlaceholder: $("#mapPlaceholder"),
   wallsLayer: $("#wallsLayer"),
@@ -88,10 +90,15 @@ let sequencePlacement = null;
 let sequencePlayback = null;
 let wallDraftPoint = null;
 let activeDrag = null;
+let activePan = null;
+let suppressStageClick = false;
+let spaceHeld = false;
+let cameraSaveTimer = null;
 let toastTimer = null;
 
 if (new URLSearchParams(window.location.search).get("mode") === "player") {
   state.ui.role = "player";
+  state.ui.activeTool = "select";
 }
 
 function makeId(prefix) {
@@ -115,12 +122,8 @@ function escapeHtml(value) {
 }
 
 function initialState() {
-  const exampleBlueprintId = "blueprint-example";
-  const exampleTokenId = "token-example-player";
-  const sequenceId = "sequence-example";
-
   return {
-    schemaVersion: 1,
+    schemaVersion: STATE_SCHEMA_VERSION,
     room: { id: makeId("room"), name: "Mesa de teste" },
     members: [
       { id: "gm", name: "Mestre", role: "gm" },
@@ -134,26 +137,8 @@ function initialState() {
     },
     library: {
       maps: [],
-      tokenBlueprints: [
-        {
-          id: exampleBlueprintId,
-          name: "Token de exemplo",
-          ownerId: PLAYER_ID,
-          images: [],
-          defaultSize: 0.08,
-        },
-      ],
-      sequences: [
-        {
-          id: sequenceId,
-          name: "Sinal no corredor",
-          speaker: "Narrador",
-          frames: [
-            { image: null, text: "Um pequeno sinal luminoso pulsa na parede." },
-            { image: null, text: "Quando você se aproxima, alguma coisa responde do outro lado." },
-          ],
-        },
-      ],
+      tokenBlueprints: [],
+      sequences: [],
     },
     scenes: [
       {
@@ -162,45 +147,11 @@ function initialState() {
         mapAssetId: null,
         globalIllumination: false,
         visionMaskEnabled: true,
-        tokens: [
-          {
-            id: exampleTokenId,
-            blueprintId: exampleBlueprintId,
-            ownerId: PLAYER_ID,
-            x: 0.42,
-            y: 0.52,
-            size: 0.08,
-            activeKey: "1",
-            rotation: 0,
-            visionRange: 0.32,
-          },
-          {
-            id: "token-example-gm",
-            blueprintId: exampleBlueprintId,
-            ownerId: "gm",
-            x: 0.7,
-            y: 0.52,
-            size: 0.08,
-            activeKey: "1",
-            rotation: 0,
-            visionRange: 0,
-          },
-        ],
-        walls: [
-          { id: "wall-a", a: { x: 0.2, y: 0.2 }, b: { x: 0.2, y: 0.8 }, blocksMovement: true, blocksVision: true, blocksLight: true },
-          { id: "wall-b", a: { x: 0.2, y: 0.2 }, b: { x: 0.8, y: 0.2 }, blocksMovement: true, blocksVision: true, blocksLight: true },
-          { id: "wall-c", a: { x: 0.8, y: 0.2 }, b: { x: 0.8, y: 0.8 }, blocksMovement: true, blocksVision: true, blocksLight: true },
-          { id: "wall-d", a: { x: 0.2, y: 0.8 }, b: { x: 0.8, y: 0.8 }, blocksMovement: true, blocksVision: true, blocksLight: true },
-          { id: "wall-divider", a: { x: 0.57, y: 0.2 }, b: { x: 0.57, y: 0.44 }, blocksMovement: true, blocksVision: true, blocksLight: true },
-          { id: "wall-divider-2", a: { x: 0.57, y: 0.56 }, b: { x: 0.57, y: 0.8 }, blocksMovement: true, blocksVision: true, blocksLight: true },
-        ],
-        lights: [
-          { id: "light-a", x: 0.33, y: 0.33, radius: 0.18, color: "#f4c783" },
-          { id: "light-b", x: 0.7, y: 0.68, radius: 0.18, color: "#83e1dc" },
-        ],
-        hotspots: [
-          { id: "hotspot-example", sequenceId, x: 0.69, y: 0.36, visible: true },
-        ],
+        camera: { x: 0, y: 0, zoom: 1 },
+        tokens: [],
+        walls: [],
+        lights: [],
+        hotspots: [],
       },
     ],
     activeSceneId: "scene-main",
@@ -221,6 +172,92 @@ function loadState() {
     console.warn("Não foi possível carregar o estado local.", error);
     return initialState();
   }
+}
+
+function normalizePoint(value, fallback = { x: 0.5, y: 0.5 }) {
+  const x = Number(value?.x);
+  const y = Number(value?.y);
+  return {
+    x: clamp(Number.isFinite(x) ? x : fallback.x, 0.01, 0.99),
+    y: clamp(Number.isFinite(y) ? y : fallback.y, 0.01, 0.99),
+  };
+}
+
+function normalizeCamera(value) {
+  const x = Number(value?.x);
+  const y = Number(value?.y);
+  const zoom = Number(value?.zoom);
+  return {
+    x: Number.isFinite(x) ? x : 0,
+    y: Number.isFinite(y) ? y : 0,
+    zoom: clamp(Number.isFinite(zoom) ? zoom : 1, 0.5, 4),
+  };
+}
+
+function normalizeTokens(tokens) {
+  const seenIds = new Set();
+  return tokens.reduce((normalizedTokens, token) => {
+    if (!token || typeof token !== "object") return normalizedTokens;
+    let id = String(token.id || makeId("token"));
+    if (seenIds.has(id)) id = makeId("token");
+    seenIds.add(id);
+    normalizedTokens.push({
+      ...token,
+      id,
+      blueprintId: String(token.blueprintId || ""),
+      ownerId: String(token.ownerId || PLAYER_ID),
+      ...normalizePoint(token),
+      size: clamp(Number(token.size) || 0.08, 0.025, 0.5),
+      activeKey: String(token.activeKey || "1"),
+      rotation: Number.isFinite(Number(token.rotation)) ? Number(token.rotation) : 0,
+      visionRange: clamp(Number(token.visionRange) || 0, 0, 2),
+    });
+    return normalizedTokens;
+  }, []);
+}
+
+function normalizeWalls(walls) {
+  const sampleWallIds = new Set(["wall-a", "wall-b", "wall-c", "wall-d", "wall-divider", "wall-divider-2"]);
+  const seenIds = new Set();
+  return walls.reduce((normalizedWalls, wall) => {
+    if (!wall || typeof wall !== "object" || sampleWallIds.has(wall.id)) return normalizedWalls;
+    const a = normalizePoint(wall.a);
+    const b = normalizePoint(wall.b);
+    if (Math.hypot(a.x - b.x, a.y - b.y) < 0.004) return normalizedWalls;
+    let id = String(wall.id || makeId("wall"));
+    if (seenIds.has(id)) id = makeId("wall");
+    seenIds.add(id);
+    normalizedWalls.push({
+      ...wall,
+      id,
+      a,
+      b,
+      blocksMovement: wall.blocksMovement !== false,
+      blocksVision: wall.blocksVision !== false,
+      blocksLight: wall.blocksLight !== false,
+    });
+    return normalizedWalls;
+  }, []);
+}
+
+function normalizeLights(lights) {
+  const sampleLightIds = new Set(["light-a", "light-b"]);
+  const seenIds = new Set();
+  return lights.reduce((normalizedLights, light) => {
+    if (!light || typeof light !== "object" || sampleLightIds.has(light.id)) return normalizedLights;
+    let id = String(light.id || makeId("light"));
+    if (seenIds.has(id)) id = makeId("light");
+    seenIds.add(id);
+    const point = normalizePoint(light);
+    normalizedLights.push({
+      ...light,
+      id,
+      ...point,
+      radius: clamp(Number(light.radius) || 0.2, 0.02, 2),
+      color: String(light.color || "#f4c783"),
+    });
+    return normalizedLights;
+  }, []);
 }
 
 function normalizeState(value) {
@@ -245,13 +282,19 @@ function normalizeState(value) {
 
   normalized.scenes = normalized.scenes.map((scene) => ({
     ...scene,
-    tokens: Array.isArray(scene.tokens) ? scene.tokens : [],
-    walls: Array.isArray(scene.walls) ? scene.walls : [],
-    lights: Array.isArray(scene.lights) ? scene.lights : [],
-    hotspots: Array.isArray(scene.hotspots) ? scene.hotspots : [],
+    camera: normalizeCamera(scene.camera),
+    tokens: normalizeTokens((Array.isArray(scene.tokens) ? scene.tokens : [])
+      .filter((token) => token?.id !== "token-example-player" && token?.id !== "token-example-gm")),
+    walls: normalizeWalls(Array.isArray(scene.walls) ? scene.walls : []),
+    lights: normalizeLights(Array.isArray(scene.lights) ? scene.lights : []),
+    hotspots: (Array.isArray(scene.hotspots) ? scene.hotspots : [])
+      .filter((hotspot) => hotspot?.id !== "hotspot-example")
+      .map((hotspot) => ({ ...hotspot, ...normalizePoint(hotspot), visible: hotspot.visible !== false })),
     globalIllumination: Boolean(scene.globalIllumination),
     visionMaskEnabled: scene.visionMaskEnabled !== false,
   }));
+
+  normalized.schemaVersion = STATE_SCHEMA_VERSION;
 
   if (!normalized.scenes.some((scene) => scene.id === normalized.activeSceneId)) {
     normalized.activeSceneId = normalized.scenes[0].id;
@@ -272,6 +315,18 @@ function saveState() {
 
 function currentScene() {
   return state.scenes.find((scene) => scene.id === state.activeSceneId) || state.scenes[0];
+}
+
+function currentCamera() {
+  const scene = currentScene();
+  if (!scene.camera) scene.camera = normalizeCamera();
+  return scene.camera;
+}
+
+function renderCamera() {
+  if (!els.sceneViewport) return;
+  const camera = currentCamera();
+  els.sceneViewport.style.transform = `translate3d(${camera.x}px, ${camera.y}px, 0) scale(${camera.zoom})`;
 }
 
 function currentRole() {
@@ -317,6 +372,7 @@ function renderAll() {
   renderShell();
   renderSidebar();
   renderToolbar();
+  renderCamera();
   renderMap();
   renderCanvasObjects();
   renderFooter();
@@ -392,10 +448,11 @@ function renderSidebar() {
 
 function renderToolbar() {
   const tool = state.ui.activeTool;
+  els.stage.dataset.tool = tool;
   els.toolButtons.forEach((button) => button.classList.toggle("active", button.dataset.tool === tool));
   if (currentRole() === "gm") {
     const messages = {
-      select: "Clique em um token para inspecionar",
+      select: "Arraste o fundo para mover · roda para zoom",
       wall: wallDraftPoint ? "Escolha o segundo ponto da barreira" : "Clique em dois pontos para desenhar uma barreira",
       light: "Clique no mapa para adicionar uma luz",
       hotspot: "Clique no mapa para criar uma sequência narrativa",
@@ -643,12 +700,113 @@ function cross(a, b) {
   return a.x * b.y - a.y * b.x;
 }
 
-function clientToNormalized(event) {
+function clientToStagePixels(event) {
   const rect = els.stage.getBoundingClientRect();
   return {
-    x: clamp((event.clientX - rect.left) / rect.width, 0.01, 0.99),
-    y: clamp((event.clientY - rect.top) / rect.height, 0.01, 0.99),
+    x: event.clientX - rect.left,
+    y: event.clientY - rect.top,
+    width: Math.max(1, rect.width),
+    height: Math.max(1, rect.height),
   };
+}
+
+function clientToScenePoint(event) {
+  const pointer = clientToStagePixels(event);
+  const camera = currentCamera();
+  return {
+    x: (pointer.x - camera.x) / (pointer.width * camera.zoom),
+    y: (pointer.y - camera.y) / (pointer.height * camera.zoom),
+  };
+}
+
+function clientToNormalized(event) {
+  const point = clientToScenePoint(event);
+  return {
+    x: clamp(point.x, 0.01, 0.99),
+    y: clamp(point.y, 0.01, 0.99),
+  };
+}
+
+function resetCamera() {
+  const camera = currentCamera();
+  camera.x = 0;
+  camera.y = 0;
+  camera.zoom = 1;
+  renderCamera();
+  renderLighting();
+  saveState();
+  showToast("Câmera centralizada e zoom restaurado.");
+}
+
+function scheduleCameraSave() {
+  window.clearTimeout(cameraSaveTimer);
+  cameraSaveTimer = window.setTimeout(() => saveState(), 180);
+}
+
+function handleStageWheel(event) {
+  event.preventDefault();
+  const pointer = clientToStagePixels(event);
+  const scenePoint = clientToScenePoint(event);
+  const camera = currentCamera();
+  const zoomFactor = Math.pow(1.0018, -event.deltaY);
+  const nextZoom = clamp(camera.zoom * zoomFactor, 0.5, 4);
+  if (Math.abs(nextZoom - camera.zoom) < 0.0001) return;
+  camera.zoom = nextZoom;
+  camera.x = pointer.x - scenePoint.x * pointer.width * camera.zoom;
+  camera.y = pointer.y - scenePoint.y * pointer.height * camera.zoom;
+  renderCamera();
+  renderLighting();
+  scheduleCameraSave();
+}
+
+function handleStagePanStart(event) {
+  if (![0, 1].includes(event.button)) return;
+  const primaryPanAllowed = currentRole() === "player" || state.ui.activeTool === "select";
+  if (event.button === 0 && !spaceHeld && !primaryPanAllowed) return;
+  if (event.target.closest(".token") || event.target.closest(".hotspot")) return;
+  const camera = currentCamera();
+  activePan = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    cameraX: camera.x,
+    cameraY: camera.y,
+    moved: false,
+  };
+  els.stage.classList.add("pan-active");
+  els.stage.setPointerCapture?.(event.pointerId);
+  window.addEventListener("pointermove", handleStagePanMove);
+  window.addEventListener("pointerup", finishStagePan);
+  window.addEventListener("pointercancel", finishStagePan);
+  event.preventDefault();
+}
+
+function handleStagePanMove(event) {
+  if (!activePan || event.pointerId !== activePan.pointerId) return;
+  const dx = event.clientX - activePan.startX;
+  const dy = event.clientY - activePan.startY;
+  if (!activePan.moved && Math.hypot(dx, dy) < 3) return;
+  activePan.moved = true;
+  suppressStageClick = true;
+  const camera = currentCamera();
+  camera.x = activePan.cameraX + dx;
+  camera.y = activePan.cameraY + dy;
+  renderCamera();
+  renderLighting();
+  event.preventDefault();
+}
+
+function finishStagePan(event) {
+  if (!activePan || (event?.pointerId != null && event.pointerId !== activePan.pointerId)) return;
+  window.removeEventListener("pointermove", handleStagePanMove);
+  window.removeEventListener("pointerup", finishStagePan);
+  window.removeEventListener("pointercancel", finishStagePan);
+  els.stage.classList.remove("pan-active");
+  if (activePan.moved) {
+    saveState();
+    window.setTimeout(() => { suppressStageClick = false; }, 0);
+  }
+  activePan = null;
 }
 
 function distancePointToSegment(point, start, end) {
@@ -683,8 +841,15 @@ function segmentsIntersect(a, b, c, d) {
 function movementWouldCollide(token, from, to) {
   const radius = (Number(token.size) || 0.08) / 2;
   return currentScene().walls.some((wall) => {
-    if (wall.blocksMovement === false) return false;
+    if (wall.blocksMovement === false || !wall.a || !wall.b) return false;
+    if (Math.hypot(wall.a.x - wall.b.x, wall.a.y - wall.b.y) < 0.004) return false;
     return segmentsIntersect(from, to, wall.a, wall.b) || distancePointToSegment(to, wall.a, wall.b) < radius;
+  });
+}
+
+function updateSelectedTokenStyles() {
+  $$(".token").forEach((element) => {
+    element.classList.toggle("selected", element.dataset.tokenId === state.ui.selectedTokenId);
   });
 }
 
@@ -699,12 +864,23 @@ function bindTokenInteractions() {
       if (event.button !== 0) return;
       const token = getToken(element.dataset.tokenId);
       if (!token) return;
-      selectToken(token.id);
-      if (state.ui.activeTool !== "select" || !canMoveToken(token)) return;
-      activeDrag = { tokenId: token.id, element, moved: false, blocked: false, pointerId: event.pointerId };
+      selectToken(token.id, { refreshObjects: false });
+      if ((currentRole() !== "player" && state.ui.activeTool !== "select") || !canMoveToken(token)) return;
+      const point = clientToNormalized(event);
+      activeDrag = {
+        tokenId: token.id,
+        element,
+        moved: false,
+        blocked: false,
+        pointerId: event.pointerId,
+        offsetX: token.x - point.x,
+        offsetY: token.y - point.y,
+      };
       element.setPointerCapture?.(event.pointerId);
       window.addEventListener("pointermove", handleTokenDrag);
-      window.addEventListener("pointerup", finishTokenDrag, { once: true });
+      window.addEventListener("pointerup", finishTokenDrag);
+      window.addEventListener("pointercancel", finishTokenDrag);
+      event.preventDefault();
     });
     element.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") {
@@ -716,10 +892,14 @@ function bindTokenInteractions() {
 }
 
 function handleTokenDrag(event) {
-  if (!activeDrag) return;
+  if (!activeDrag || event.pointerId !== activeDrag.pointerId) return;
   const token = getToken(activeDrag.tokenId);
   if (!token) return;
-  const point = clientToNormalized(event);
+  const cursor = clientToNormalized(event);
+  const point = {
+    x: clamp(cursor.x + activeDrag.offsetX, 0.01, 0.99),
+    y: clamp(cursor.y + activeDrag.offsetY, 0.01, 0.99),
+  };
   const previous = { x: token.x, y: token.y };
   if (movementWouldCollide(token, previous, point)) {
     activeDrag.blocked = true;
@@ -732,10 +912,14 @@ function handleTokenDrag(event) {
   activeDrag.element.style.left = `${token.x * 100}%`;
   activeDrag.element.style.top = `${token.y * 100}%`;
   renderLighting();
+  event.preventDefault();
 }
 
-function finishTokenDrag() {
+function finishTokenDrag(event) {
+  if (!activeDrag || (event?.pointerId != null && event.pointerId !== activeDrag.pointerId)) return;
   window.removeEventListener("pointermove", handleTokenDrag);
+  window.removeEventListener("pointerup", finishTokenDrag);
+  window.removeEventListener("pointercancel", finishTokenDrag);
   if (activeDrag?.moved) {
     saveState();
     renderFooter();
@@ -746,9 +930,10 @@ function finishTokenDrag() {
   renderToolbar();
 }
 
-function selectToken(tokenId) {
+function selectToken(tokenId, options = {}) {
   state.ui.selectedTokenId = tokenId;
-  renderCanvasObjects();
+  if (options.refreshObjects !== false) renderCanvasObjects();
+  else updateSelectedTokenStyles();
   renderFooter();
   renderInspector();
 }
@@ -770,6 +955,10 @@ function setTool(tool) {
 }
 
 function handleStageClick(event) {
+  if (suppressStageClick) {
+    suppressStageClick = false;
+    return;
+  }
   if (event.target.closest(".token") || event.target.closest(".hotspot")) return;
   if (currentRole() !== "gm") {
     clearSelection();
@@ -1045,7 +1234,7 @@ function createScene() {
   const name = window.prompt("Nome da nova cena", `Cena ${state.scenes.length + 1}`)?.trim();
   if (!name) return;
   const scene = {
-    id: makeId("scene"), name, mapAssetId: null, globalIllumination: false, visionMaskEnabled: true,
+    id: makeId("scene"), name, mapAssetId: null, camera: { x: 0, y: 0, zoom: 1 }, globalIllumination: false, visionMaskEnabled: true,
     tokens: [], walls: [], lights: [], hotspots: [],
   };
   state.scenes.push(scene);
@@ -1104,6 +1293,11 @@ function handleDelegatedClick(event) {
 function handleKeydown(event) {
   const tagName = document.activeElement?.tagName;
   if (["INPUT", "TEXTAREA", "SELECT"].includes(tagName)) return;
+  if (event.key === " ") {
+    spaceHeld = true;
+    event.preventDefault();
+    return;
+  }
   if (event.key === "Escape") {
     wallDraftPoint = null;
     state.ui.activeTool = "select";
@@ -1118,6 +1312,10 @@ function handleKeydown(event) {
   if (/^[1-9]$/.test(event.key) && state.ui.selectedTokenId) setTokenState(state.ui.selectedTokenId, event.key);
 }
 
+function handleKeyup(event) {
+  if (event.key === " ") spaceHeld = false;
+}
+
 function init() {
   els.roleButtons.forEach((button) => button.addEventListener("click", () => {
     state.ui.role = button.dataset.roleChoice;
@@ -1130,13 +1328,16 @@ function init() {
     els.sidePanels.forEach((panel) => panel.classList.toggle("active", panel.id === tab.dataset.panel));
   }));
   els.toolButtons.forEach((button) => button.addEventListener("click", () => setTool(button.dataset.tool)));
+  els.stage.addEventListener("pointerdown", handleStagePanStart);
+  els.stage.addEventListener("wheel", handleStageWheel, { passive: false });
   els.stage.addEventListener("click", handleStageClick);
+  els.stage.addEventListener("contextmenu", (event) => event.preventDefault());
   els.mapInput.addEventListener("change", handleMapUpload);
   $("#newToken").addEventListener("click", () => openTokenDialog());
   $("#newScene").addEventListener("click", createScene);
   $("#renameRoom").addEventListener("click", renameRoom);
   $("#shareRoom").addEventListener("click", shareRoom);
-  $("#resetView").addEventListener("click", () => showToast("A câmera usa o mapa inteiro nesta primeira versão."));
+  $("#resetView").addEventListener("click", resetCamera);
   $("#clearSelection").addEventListener("click", clearSelection);
   $("#closeBetaStrip").addEventListener("click", () => { els.betaStrip.hidden = true; });
   els.sceneName.addEventListener("change", () => {
@@ -1181,6 +1382,7 @@ function init() {
   els.nextFrame.addEventListener("click", () => advanceSequence(1));
   document.addEventListener("click", handleDelegatedClick);
   document.addEventListener("keydown", handleKeydown);
+  document.addEventListener("keyup", handleKeyup);
   window.addEventListener("resize", renderLighting);
   if (window.ResizeObserver) new ResizeObserver(renderLighting).observe(els.stage);
   renderAll();
