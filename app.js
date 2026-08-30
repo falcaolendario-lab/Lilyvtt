@@ -14,6 +14,11 @@ const PLAYER_ID = "player-1";
 const DEFAULT_LIGHT_COLOR = "#f4c783";
 const MAX_TOKEN_ANIMATION_FRAMES = 12;
 const TOKEN_ANIMATION_FRAME_MS = 560;
+const TOKEN_IMPACT_DURATION_MS = 720;
+const TOKEN_ATTACK_ACTIONS = {
+  shot: { name: "Disparo", icon: "➜", hint: "à distância" },
+  physical: { name: "Ataque físico", icon: "↯", hint: "corpo a corpo" },
+};
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
@@ -41,6 +46,7 @@ const els = {
   darknessLayer: $("#darknessLayer"),
   lightsLayer: $("#lightsLayer"),
   hotspotsLayer: $("#hotspotsLayer"),
+  attackLayer: $("#attackLayer"),
   tokensLayer: $("#tokensLayer"),
   wallDraft: $("#wallDraft"),
   darknessDraft: $("#darknessDraft"),
@@ -104,6 +110,8 @@ let editingTokenAnimation = null;
 let sequencePlayback = null;
 let wallDraftPoint = null;
 let activeDrag = null;
+let activeAttackDrag = null;
+let armedAttack = null;
 let activePan = null;
 let activeLightDrag = null;
 let activeDarknessDrag = null;
@@ -115,6 +123,7 @@ let toastTimer = null;
 let removedTokenImageKeys = new Set();
 let framePreviewUrls = [];
 const activeTokenAnimations = new Map();
+const activeTokenImpacts = new Map();
 
 if (new URLSearchParams(window.location.search).get("mode") === "player") {
   state.ui.role = "player";
@@ -162,6 +171,7 @@ function initialState() {
       moveOwnToken: true,
       changeOwnImage: true,
       interactSequences: true,
+      useTokenAttacks: true,
       pingAndMeasure: true,
     },
     library: {
@@ -561,6 +571,187 @@ function playTokenAnimation(tokenId, animationId = null) {
   scheduleTokenAnimation(tokenId);
 }
 
+function getTokenAttackAction(attackType) {
+  return TOKEN_ATTACK_ACTIONS[attackType] || null;
+}
+
+function canUseTokenAttacks(token) {
+  if (!token) return false;
+  if (currentRole() === "gm") return true;
+  return Boolean(state.permissions.useTokenAttacks && token.ownerId === currentMemberId());
+}
+
+function updateAttackTargetStyles() {
+  $$(".token").forEach((element) => {
+    const tokenId = element.dataset.tokenId;
+    element.classList.toggle("attack-source", Boolean(armedAttack?.attackerId === tokenId));
+    element.classList.toggle("attack-target", Boolean(activeAttackDrag?.targetId === tokenId && activeAttackDrag?.attackerId !== tokenId));
+  });
+}
+
+function renderAttackLayer() {
+  if (!els.attackLayer) return;
+  const lines = [];
+  lines.push(`<defs>
+    <marker id="attack-arrow-shot" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L8,4 L0,8 Z" fill="#83e1dc" /></marker>
+    <marker id="attack-arrow-physical" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L8,4 L0,8 Z" fill="#f4c783" /></marker>
+  </defs>`);
+
+  if (activeAttackDrag) {
+    const attacker = getToken(activeAttackDrag.attackerId);
+    const attack = getTokenAttackAction(activeAttackDrag.attackType);
+    if (attacker && attack && activeAttackDrag.point) {
+      const marker = activeAttackDrag.attackType === "shot" ? "attack-arrow-shot" : "attack-arrow-physical";
+      lines.push(`<line class="attack-preview attack-${escapeHtml(activeAttackDrag.attackType)}" x1="${attacker.x}" y1="${attacker.y}" x2="${activeAttackDrag.point.x}" y2="${activeAttackDrag.point.y}" marker-end="url(#${marker})" />`);
+    }
+  }
+
+  activeTokenImpacts.forEach((impact, targetId) => {
+    const attacker = getToken(impact.attackerId);
+    const target = getToken(targetId);
+    const attack = getTokenAttackAction(impact.attackType);
+    if (!attacker || !target || !attack) return;
+    lines.push(`<line class="attack-impact-trail attack-${escapeHtml(impact.attackType)}" x1="${attacker.x}" y1="${attacker.y}" x2="${target.x}" y2="${target.y}" />`);
+  });
+  els.attackLayer.innerHTML = lines.join("");
+  updateAttackTargetStyles();
+}
+
+function setArmedAttack(tokenId, attackType) {
+  const token = getToken(tokenId);
+  const attack = getTokenAttackAction(attackType);
+  if (!token || !attack) return;
+  if (!canUseTokenAttacks(token)) {
+    showToast("O Mestre não liberou ataques para este token.", true);
+    return;
+  }
+  if (armedAttack?.attackerId === token.id && armedAttack.attackType === attackType) {
+    armedAttack = null;
+    renderToolbar();
+    renderCanvasObjects();
+    renderFooter();
+    showToast("Ação cancelada.");
+    return;
+  }
+  armedAttack = { attackerId: token.id, attackType };
+  activeAttackDrag = null;
+  renderToolbar();
+  renderCanvasObjects();
+  renderFooter();
+  showToast(`${attack.name} preparado. Arraste do token até o alvo.`);
+}
+
+function clearArmedAttack({ render = true } = {}) {
+  if (activeAttackDrag) {
+    removeAttackDragListeners();
+    activeAttackDrag = null;
+  }
+  armedAttack = null;
+  if (render) {
+    renderToolbar();
+    renderCanvasObjects();
+    renderFooter();
+  }
+}
+
+function getTokenAtClientPoint(clientX, clientY) {
+  const element = document.elementFromPoint?.(clientX, clientY);
+  return element?.closest?.(".token")?.dataset.tokenId || null;
+}
+
+function startAttackDrag(event, token) {
+  if (!armedAttack || armedAttack.attackerId !== token.id) return false;
+  activeAttackDrag = {
+    attackerId: token.id,
+    attackType: armedAttack.attackType,
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    point: { x: token.x, y: token.y },
+    targetId: null,
+    moved: false,
+  };
+  tokenElementForDrag(event)?.setPointerCapture?.(event.pointerId);
+  window.addEventListener("pointermove", handleAttackDragMove);
+  window.addEventListener("pointerup", finishAttackDrag);
+  window.addEventListener("pointercancel", cancelAttackDrag);
+  renderAttackLayer();
+  event.preventDefault();
+  return true;
+}
+
+function tokenElementForDrag(event) {
+  return event.currentTarget?.closest?.(".token") || event.target?.closest?.(".token") || null;
+}
+
+function handleAttackDragMove(event) {
+  if (!activeAttackDrag || event.pointerId !== activeAttackDrag.pointerId) return;
+  const distance = Math.hypot(event.clientX - activeAttackDrag.startX, event.clientY - activeAttackDrag.startY);
+  activeAttackDrag.moved = activeAttackDrag.moved || distance >= 4;
+  activeAttackDrag.point = clientToNormalized(event);
+  activeAttackDrag.targetId = getTokenAtClientPoint(event.clientX, event.clientY);
+  renderAttackLayer();
+  event.preventDefault();
+}
+
+function removeAttackDragListeners() {
+  window.removeEventListener("pointermove", handleAttackDragMove);
+  window.removeEventListener("pointerup", finishAttackDrag);
+  window.removeEventListener("pointercancel", cancelAttackDrag);
+}
+
+function cancelAttackDrag() {
+  removeAttackDragListeners();
+  activeAttackDrag = null;
+  renderAttackLayer();
+}
+
+function finishAttackDrag(event) {
+  if (!activeAttackDrag || (event?.pointerId != null && event.pointerId !== activeAttackDrag.pointerId)) return;
+  const drag = activeAttackDrag;
+  removeAttackDragListeners();
+  activeAttackDrag = null;
+  drag.targetId = getTokenAtClientPoint(event.clientX, event.clientY) || drag.targetId;
+  const validTarget = drag.moved && drag.targetId && drag.targetId !== drag.attackerId;
+  if (validTarget) executeTokenAttack(drag.attackerId, drag.targetId, drag.attackType);
+  else renderAttackLayer();
+}
+
+function finishTokenImpact(targetId, impactId) {
+  const impact = activeTokenImpacts.get(targetId);
+  if (!impact || impact.id !== impactId) return;
+  activeTokenImpacts.delete(targetId);
+  renderCanvasObjects();
+  renderFooter();
+  renderInspector();
+}
+
+function executeTokenAttack(attackerId, targetId, attackType) {
+  const attacker = getToken(attackerId);
+  const target = getToken(targetId);
+  const attack = getTokenAttackAction(attackType);
+  if (!attacker || !target || attacker.id === target.id || !attack) {
+    clearArmedAttack();
+    return;
+  }
+  if (!canUseTokenAttacks(attacker)) {
+    clearArmedAttack();
+    showToast("O Mestre não liberou ataques para este token.", true);
+    return;
+  }
+  const previousImpact = activeTokenImpacts.get(target.id);
+  if (previousImpact) window.clearTimeout(previousImpact.timer);
+  const impact = { id: makeId("impact"), attackerId: attacker.id, attackType, timer: null };
+  impact.timer = window.setTimeout(() => finishTokenImpact(target.id, impact.id), TOKEN_IMPACT_DURATION_MS);
+  activeTokenImpacts.set(target.id, impact);
+  armedAttack = null;
+  state.ui.selectedTokenId = attacker.id;
+  state.ui.selectedLightId = null;
+  state.ui.selectedDarknessId = null;
+  renderAll();
+  showToast(`${attack.name} executado · impacto visual aplicado.`);
+}
+
 function canMoveToken(token) {
   if (currentRole() === "gm") return true;
   return Boolean(state.permissions.moveOwnToken && token.ownerId === currentMemberId());
@@ -707,7 +898,12 @@ function renderToolbar() {
       darkness: "Arraste no mapa para criar uma área escura · clique para uma área padrão",
       animation: "Clique em um token para ativar sua animação",
     };
-    els.toolStatus.textContent = messages[tool] || messages.select;
+    if (armedAttack) {
+      const attack = getTokenAttackAction(armedAttack.attackType);
+      els.toolStatus.textContent = `${attack?.name || "Ação"} preparado · arraste do token até o alvo`;
+    } else {
+      els.toolStatus.textContent = messages[tool] || messages.select;
+    }
   }
 }
 
@@ -753,12 +949,17 @@ function renderCanvasObjects() {
     const isOwned = token.ownerId === currentMemberId();
     const playback = activeTokenAnimations.get(token.id);
     const animation = getTokenAnimation(token, playback?.animationId);
+    const impact = activeTokenImpacts.get(token.id);
     const contents = image
       ? `<img src="${escapeHtml(image.src)}" alt="${escapeHtml(blueprint.name)}" draggable="false" />`
       : `<span class="token-fallback">${escapeHtml(blueprint.name.slice(0, 1).toUpperCase())}</span>`;
+    const impactMarkup = impact
+      ? `<span class="token-impact-effect token-impact-${escapeHtml(impact.attackType)}" aria-hidden="true"></span>`
+      : "";
     return `
-      <div class="token ${isSelected ? "selected" : ""} ${isOwned ? "player-owned" : ""} ${playback ? "token-animation-playing" : ""}" data-token-id="${escapeHtml(token.id)}" style="left:${token.x * 100}%;top:${token.y * 100}%;--token-size:${(token.size || blueprint.defaultSize || 0.08) * 100}%;transform:translate(-50%,-50%) rotate(${Number(token.rotation) || 0}deg)" tabindex="0" role="button" aria-label="Token ${escapeHtml(blueprint.name)}">
-        ${contents}
+      <div class="token ${isSelected ? "selected" : ""} ${isOwned ? "player-owned" : ""} ${playback ? "token-animation-playing" : ""} ${armedAttack?.attackerId === token.id ? "attack-source" : ""} ${activeAttackDrag?.targetId === token.id && activeAttackDrag?.attackerId !== token.id ? "attack-target" : ""} ${impact ? `token-impact-active token-impact-${escapeHtml(impact.attackType)}` : ""}" data-token-id="${escapeHtml(token.id)}" style="left:${token.x * 100}%;top:${token.y * 100}%;--token-size:${(token.size || blueprint.defaultSize || 0.08) * 100}%;transform:translate(-50%,-50%) rotate(${Number(token.rotation) || 0}deg)" tabindex="0" role="button" aria-label="Token ${escapeHtml(blueprint.name)}">
+        <span class="token-body">${contents}</span>
+        ${impactMarkup}
         ${animationFrame?.text ? `<span class="token-animation-caption">${escapeHtml(animationFrame.text)}</span>` : ""}
         ${playback && animation ? `<span class="token-animation-badge">▶ ${playback.frameIndex + 1}/${animation.frames.length}</span>` : ""}
         <span class="token-tag">${escapeHtml(blueprint.name)}</span>
@@ -774,6 +975,7 @@ function renderCanvasObjects() {
   bindTokenInteractions();
   bindLightInteractions();
   bindDarknessInteractions();
+  renderAttackLayer();
 }
 
 function renderFooter() {
@@ -822,7 +1024,10 @@ function renderFooter() {
   const animationButtons = animations.length && canPlayTokenAnimation(token)
     ? `<span class="eyebrow">ANIMAÇÃO</span>${animations.map((item) => `<button class="hotkey available ${playback?.animationId === item.id ? "current" : ""}" data-action="play-token-animation" data-id="${escapeHtml(token.id)}" data-animation-id="${escapeHtml(item.id)}" title="Ativar ${escapeHtml(item.name)}">▶</button>`).join("")}`
     : "";
-  els.hotkeyStrip.innerHTML = `<span class="eyebrow">ESTADOS</span>${stateButtons}${animationButtons}`;
+  const attackButtons = canUseTokenAttacks(token)
+    ? `<span class="eyebrow">AÇÕES</span>${Object.entries(TOKEN_ATTACK_ACTIONS).map(([type, item]) => `<button class="attack-action ${armedAttack?.attackerId === token.id && armedAttack.attackType === type ? "armed" : ""}" data-attack-type="${type}" data-token-id="${escapeHtml(token.id)}" title="${escapeHtml(item.name)}: arraste do token até o alvo"><span class="attack-action-icon">${item.icon}</span><span class="attack-action-copy"><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.hint)}</small></span></button>`).join("")}<span class="attack-help">clique para preparar · arraste até o alvo</span>`
+    : "";
+  els.hotkeyStrip.innerHTML = `<span class="eyebrow">ESTADOS</span>${stateButtons}${animationButtons}${attackButtons}`;
 }
 
 function renderInspector() {
@@ -920,6 +1125,16 @@ function renderInspector() {
         <button class="primary-button full-width" data-action="edit-token-animation" data-id="${escapeHtml(token.id)}" style="margin-top:10px">＋ ${animations.length ? "Criar outra animação" : "Criar animação"}</button>
         ${playback && activeAnimation ? `<div class="inspector-meta" style="color:var(--violet)">▶ ${escapeHtml(activeAnimation.name)} · frame ${playback.frameIndex + 1}/${activeAnimation.frames.length}</div>` : ""}
       </div>`;
+    const attackRows = canUseTokenAttacks(token)
+      ? Object.entries(TOKEN_ATTACK_ACTIONS).map(([type, item]) => `<button class="attack-action-button ${armedAttack?.attackerId === token.id && armedAttack.attackType === type ? "armed" : ""}" data-attack-type="${type}" data-token-id="${escapeHtml(token.id)}" title="Preparar ${escapeHtml(item.name)}"><span class="attack-action-icon">${item.icon}</span><span class="attack-action-copy"><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.hint)} · depois arraste até o alvo</small></span></button>`).join("")
+      : '<div class="empty-list">O Mestre não liberou ataques para este token.</div>';
+    els.inspectorContent.innerHTML += `
+      <div class="inspector-card">
+        <div class="eyebrow">ATTACK ACTIONS</div>
+        <div class="inspector-title">Escolher ataque</div>
+        <div class="inspector-meta">Sem dados: selecione uma ação e arraste do token até o alvo. O resultado atual é um impacto visual temporário.</div>
+        <div class="attack-action-list">${attackRows}</div>
+      </div>`;
     return;
   }
 
@@ -952,6 +1167,7 @@ function renderInspector() {
           <div><span>Seu token</span><b>${state.permissions.moveOwnToken ? "movível" : "bloqueado"}</b></div>
           <div><span>Estados 1–9</span><b>${state.permissions.changeOwnImage ? "liberados" : "bloqueados"}</b></div>
           <div><span>Animações</span><b>${state.permissions.interactSequences ? "liberadas" : "bloqueadas"}</b></div>
+          <div><span>Ataques</span><b>${state.permissions.useTokenAttacks ? "liberados" : "bloqueados"}</b></div>
         </div>
       </div>`;
 }
@@ -1288,21 +1504,30 @@ function bindTokenInteractions() {
   $$(".token").forEach((element) => {
     element.addEventListener("click", (event) => {
       event.stopPropagation();
+      const token = getToken(element.dataset.tokenId);
+      if (!token) return;
+      if (armedAttack && token.id !== armedAttack.attackerId) {
+        executeTokenAttack(armedAttack.attackerId, token.id, armedAttack.attackType);
+        return;
+      }
       if (currentRole() === "gm" && state.ui.activeTool === "animation") {
-        const token = getToken(element.dataset.tokenId);
-        if (!token) return;
         const animation = getTokenAnimation(token);
         if (animation) playTokenAnimation(token.id, animation.id);
         else openTokenAnimationDialog(token.id);
         return;
       }
-      selectToken(element.dataset.tokenId);
+      selectToken(token.id);
     });
     element.addEventListener("pointerdown", (event) => {
       if (event.button !== 0 || spaceHeld) return;
       event.stopPropagation();
       const token = getToken(element.dataset.tokenId);
       if (!token) return;
+      if (armedAttack) {
+        selectToken(token.id, { refreshObjects: false });
+        if (token.id === armedAttack.attackerId) startAttackDrag(event, token);
+        return;
+      }
       selectToken(token.id, { refreshObjects: false });
       if ((currentRole() !== "player" && state.ui.activeTool !== "select") || !canMoveToken(token)) return;
       const point = clientToNormalized(event);
@@ -1579,6 +1804,8 @@ function selectToken(tokenId, options = {}) {
 
 function selectLight(lightId, options = {}) {
   if (currentRole() !== "gm" || !getLight(lightId)) return;
+  if (activeAttackDrag) cancelAttackDrag();
+  armedAttack = null;
   state.ui.selectedTokenId = null;
   state.ui.selectedLightId = lightId;
   state.ui.selectedDarknessId = null;
@@ -1594,6 +1821,8 @@ function selectLight(lightId, options = {}) {
 
 function selectDarkness(zoneId, options = {}) {
   if (currentRole() !== "gm" || !getDarknessZone(zoneId)) return;
+  if (activeAttackDrag) cancelAttackDrag();
+  armedAttack = null;
   state.ui.selectedTokenId = null;
   state.ui.selectedLightId = null;
   state.ui.selectedDarknessId = zoneId;
@@ -1608,6 +1837,8 @@ function selectDarkness(zoneId, options = {}) {
 }
 
 function clearSelection() {
+  if (activeAttackDrag) cancelAttackDrag();
+  armedAttack = null;
   state.ui.selectedTokenId = null;
   state.ui.selectedLightId = null;
   state.ui.selectedDarknessId = null;
@@ -1697,6 +1928,8 @@ function closePanel(panel) {
 
 function setTool(tool) {
   if (currentRole() !== "gm") return;
+  if (activeAttackDrag) cancelAttackDrag();
+  armedAttack = null;
   state.ui.activeTool = tool;
   wallDraftPoint = null;
   renderToolbar();
@@ -2240,6 +2473,12 @@ function showToast(message, isError = false) {
 }
 
 function handleDelegatedClick(event) {
+  const attackAction = event.target.closest("[data-attack-type]");
+  if (attackAction) {
+    event.preventDefault();
+    setArmedAttack(attackAction.dataset.tokenId, attackAction.dataset.attackType);
+    return;
+  }
   const lightPreset = event.target.closest("[data-light-preset]");
   if (lightPreset) {
     event.preventDefault();
@@ -2307,6 +2546,8 @@ function handleKeydown(event) {
     return;
   }
   if (event.key === "Escape") {
+    if (activeAttackDrag) cancelAttackDrag();
+    armedAttack = null;
     if (activeDarknessDraw) {
       window.removeEventListener("pointermove", handleDarknessDrawMove);
       window.removeEventListener("pointerup", finishDarknessDraw);
