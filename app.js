@@ -811,7 +811,9 @@ function canChangeTokenImage(token) {
 }
 
 function canInteractWithSequences() {
-  return currentRole() === "gm" || Boolean(state.permissions.interactSequences);
+  // As sequências antigas pertencem ao espaço de preparação do Mestre.
+  // Players interagem somente com animações ligadas aos tokens já colocados.
+  return currentRole() === "gm";
 }
 
 function renderAll() {
@@ -827,8 +829,15 @@ function renderAll() {
 }
 
 function renderShell() {
+  if (launchedAsPlayer && state.ui.role !== "player") state.ui.role = "player";
   const role = currentRole();
   const scene = currentScene();
+  if (role === "player") {
+    state.ui.activeTool = "select";
+    wallDraftPoint = null;
+    state.ui.selectedLightId = null;
+    state.ui.selectedDarknessId = null;
+  }
   els.body.dataset.role = role;
   els.body.classList.toggle("linked-player", launchedAsPlayer);
   els.roomName.textContent = state.room.name;
@@ -868,6 +877,14 @@ function renderPanels() {
 }
 
 function renderSidebar() {
+  if (currentRole() !== "gm") {
+    // Não basta esconder a coluna: o Player também não recebe a biblioteca
+    // nem seus metadados no DOM renderizado.
+    els.mapList.innerHTML = "";
+    els.tokenList.innerHTML = "";
+    els.sequenceList.innerHTML = "";
+    return;
+  }
   const maps = state.library.maps;
   const blueprints = state.library.tokenBlueprints;
   const tokenAnimations = blueprints.flatMap((blueprint) => (blueprint.animations || []).map((animation) => ({ blueprint, animation })));
@@ -974,8 +991,10 @@ function renderMap() {
 
 function renderCanvasObjects() {
   const scene = currentScene();
-  els.wallsLayer.innerHTML = scene.walls.map((wall) => `
-    <line x1="${wall.a.x}" y1="${wall.a.y}" x2="${wall.b.x}" y2="${wall.b.y}" />`).join("");
+  els.wallsLayer.innerHTML = currentRole() === "gm"
+    ? scene.walls.map((wall) => `
+      <line x1="${wall.a.x}" y1="${wall.a.y}" x2="${wall.b.x}" y2="${wall.b.y}" />`).join("")
+    : "";
 
   els.darknessLayer.innerHTML = scene.darknessZones.map((zone) => `
     <div class="darkness-zone ${state.ui.selectedDarknessId === zone.id ? "selected" : ""}" data-darkness-id="${escapeHtml(zone.id)}" style="left:${zone.x * 100}%;top:${zone.y * 100}%;width:${zone.width * 100}%;height:${zone.height * 100}%;--darkness-opacity:${zone.opacity}" title="Área escura · arraste para mover" role="button" tabindex="0" aria-label="Área escura"></div>`).join("");
@@ -1027,7 +1046,7 @@ function renderCanvasObjects() {
 }
 
 function renderFooter() {
-  const selectedLight = state.ui.selectedLightId ? getLight(state.ui.selectedLightId) : null;
+  const selectedLight = currentRole() === "gm" && state.ui.selectedLightId ? getLight(state.ui.selectedLightId) : null;
   if (selectedLight) {
     els.selectionAvatar.textContent = "✦";
     els.selectionName.textContent = "Luz selecionada";
@@ -1036,7 +1055,7 @@ function renderFooter() {
     return;
   }
 
-  const selectedDarkness = state.ui.selectedDarknessId ? getDarknessZone(state.ui.selectedDarknessId) : null;
+  const selectedDarkness = currentRole() === "gm" && state.ui.selectedDarknessId ? getDarknessZone(state.ui.selectedDarknessId) : null;
   if (selectedDarkness) {
     els.selectionAvatar.textContent = "◼";
     els.selectionName.textContent = "Área escura selecionada";
@@ -1066,9 +1085,12 @@ function renderFooter() {
   els.selectionDetail.textContent = `${owner} · estado ${token.activeKey || "1"}${animationStatus} · ${canMoveToken(token) ? "pode mover" : "somente visualização"}`;
   const images = blueprint.images || [];
   const animations = getTokenAnimations(token);
-  const stateButtons = images.length
+  const canEditToken = canChangeTokenImage(token);
+  const stateButtons = canEditToken && images.length
     ? images.map((item) => `<button class="hotkey available ${String(token.activeKey) === String(item.key) ? "current" : ""}" data-action="select-state" data-id="${escapeHtml(token.id)}" data-state-key="${escapeHtml(item.key)}" title="${escapeHtml(item.label || `Estado ${item.key}`)}">${escapeHtml(item.key)}</button>`).join("")
-    : '<span class="hotkey-placeholder">Adicione imagens ao token para habilitar 1–9</span>';
+    : canEditToken
+      ? '<span class="hotkey-placeholder">Adicione imagens ao token para habilitar 1–9</span>'
+      : '<span class="hotkey-placeholder">Somente o dono ou o Mestre pode mudar este estado.</span>';
   const animationButtons = animations.length && canPlayTokenAnimation(token)
     ? `<span class="eyebrow">ANIMAÇÃO</span>${animations.map((item) => `<button class="hotkey available ${playback?.animationId === item.id ? "current" : ""}" data-action="play-token-animation" data-id="${escapeHtml(token.id)}" data-animation-id="${escapeHtml(item.id)}" title="Ativar ${escapeHtml(item.name)}">▶</button>`).join("")}`
     : "";
@@ -1079,6 +1101,11 @@ function renderFooter() {
 }
 
 function renderInspector() {
+  if (currentRole() !== "gm") {
+    els.inspectorTitle.textContent = "";
+    els.inspectorContent.innerHTML = "";
+    return;
+  }
   const light = currentRole() === "gm" && state.ui.selectedLightId ? getLight(state.ui.selectedLightId) : null;
   if (light) {
     els.inspectorTitle.textContent = "Fonte de luz";
@@ -2105,6 +2132,7 @@ function setTokenState(tokenId, stateKey) {
 }
 
 function openTokenDialog(blueprintId = null) {
+  if (currentRole() !== "gm") return;
   editingBlueprintId = blueprintId;
   pendingTokenFiles = [];
   removedTokenImageKeys = new Set();
@@ -2200,6 +2228,7 @@ function renderSequenceFrameEditor() {
 }
 
 function addSequenceFrame() {
+  if (currentRole() !== "gm") return;
   syncSequenceFrameTexts();
   if (pendingSequenceFrames.length >= MAX_TOKEN_ANIMATION_FRAMES) {
     showToast(`Uma animação pode ter no máximo ${MAX_TOKEN_ANIMATION_FRAMES} frames.`, true);
@@ -2212,12 +2241,14 @@ function addSequenceFrame() {
 }
 
 function removeSequenceFrame(frameId) {
+  if (currentRole() !== "gm") return;
   syncSequenceFrameTexts();
   pendingSequenceFrames = pendingSequenceFrames.filter((frame) => frame.id !== frameId);
   renderSequenceFrameEditor();
 }
 
 function moveSequenceFrame(frameId, direction) {
+  if (currentRole() !== "gm") return;
   syncSequenceFrameTexts();
   const index = pendingSequenceFrames.findIndex((frame) => frame.id === frameId);
   const target = index + Number(direction);
@@ -2227,6 +2258,7 @@ function moveSequenceFrame(frameId, direction) {
 }
 
 async function handleSequenceImageChange(event) {
+  if (currentRole() !== "gm") return;
   const input = event.target.closest("[data-sequence-frame-image]");
   if (!input) return;
   const frame = getSequenceFrameDraft(input.dataset.sequenceFrameImage);
@@ -2247,6 +2279,7 @@ async function handleSequenceImageChange(event) {
 }
 
 function handleSequenceFrameInput(event) {
+  if (currentRole() !== "gm") return;
   const textarea = event.target.closest("[data-sequence-frame-text]");
   if (!textarea) return;
   const frame = getSequenceFrameDraft(textarea.dataset.sequenceFrameText);
@@ -2256,6 +2289,7 @@ function handleSequenceFrameInput(event) {
 }
 
 function openTokenAnimationDialog(tokenId, animationId = null) {
+  if (currentRole() !== "gm") return;
   const token = getToken(tokenId);
   if (!token) return;
   openBlueprintAnimationDialog(token.blueprintId, animationId, token.id);
@@ -2347,6 +2381,7 @@ function fileToDataUrl(file) {
 async function handleTokenSubmit(event) {
   if (event.submitter?.value === "cancel") return;
   event.preventDefault();
+  if (currentRole() !== "gm") return;
   const name = els.tokenName.value.trim();
   if (!name) return;
   els.saveToken.disabled = true;
@@ -2401,6 +2436,7 @@ async function handleTokenSubmit(event) {
 }
 
 async function handleMapUpload(event) {
+  if (currentRole() !== "gm") return;
   const file = event.target.files?.[0];
   event.target.value = "";
   if (!file) return;
@@ -2553,18 +2589,21 @@ function handleDelegatedClick(event) {
   const frameMove = event.target.closest("[data-sequence-frame-move]");
   if (frameMove) {
     event.preventDefault();
+    if (currentRole() !== "gm") return;
     moveSequenceFrame(frameMove.dataset.sequenceFrameMove, frameMove.dataset.direction);
     return;
   }
   const frameRemove = event.target.closest("[data-sequence-frame-remove]");
   if (frameRemove) {
     event.preventDefault();
+    if (currentRole() !== "gm") return;
     removeSequenceFrame(frameRemove.dataset.sequenceFrameRemove);
     return;
   }
   const removeFrame = event.target.closest("[data-remove-frame]");
   if (removeFrame) {
     event.preventDefault();
+    if (currentRole() !== "gm") return;
     const frameId = removeFrame.dataset.removeFrame || "";
     if (frameId.startsWith("pending:")) {
       pendingTokenFiles.splice(Number(frameId.split(":")[1]), 1);
@@ -2637,6 +2676,7 @@ function handleKeyup(event) {
 
 function init() {
   els.roleButtons.forEach((button) => button.addEventListener("click", () => {
+    if (launchedAsPlayer) return;
     state.ui.role = button.dataset.roleChoice;
     state.ui.activeTool = "select";
     wallDraftPoint = null;
@@ -2714,12 +2754,15 @@ function init() {
     showToast("Permissão atualizada para o modo Player.");
   }));
   els.tokenImages.addEventListener("change", () => {
+    if (currentRole() !== "gm") return;
     const room = Math.max(0, 9 - pendingTokenFiles.length - (editingBlueprintId ? (getBlueprint(editingBlueprintId)?.images || []).filter((image) => !removedTokenImageKeys.has(String(image.key))).length : 0));
     pendingTokenFiles = [...pendingTokenFiles, ...Array.from(els.tokenImages.files || []).slice(0, room)];
     els.tokenImages.value = "";
     renderFramePreview();
   });
-  els.addTokenState.addEventListener("click", () => els.tokenImages.click());
+  els.addTokenState.addEventListener("click", () => {
+    if (currentRole() === "gm") els.tokenImages.click();
+  });
   els.addSequenceFrame.addEventListener("click", addSequenceFrame);
   els.sequenceForm.addEventListener("change", handleSequenceImageChange);
   els.sequenceForm.addEventListener("input", handleSequenceFrameInput);
