@@ -79,8 +79,8 @@ const els = {
   sequenceForm: $("#sequenceForm"),
   sequenceName: $("#sequenceName"),
   sequenceSpeaker: $("#sequenceSpeaker"),
-  sequenceLines: $("#sequenceLines"),
-  sequenceImages: $("#sequenceImages"),
+  addSequenceFrame: $("#addSequenceFrame"),
+  sequenceFrameList: $("#sequenceFrameList"),
   sequencePlayerDialog: $("#sequencePlayerDialog"),
   sequenceMedia: $("#sequenceMedia"),
   sequenceCounter: $("#sequenceCounter"),
@@ -96,7 +96,7 @@ const initialRole = launchedAsPlayer ? "player" : "gm";
 let state = loadState();
 let editingBlueprintId = null;
 let pendingTokenFiles = [];
-let pendingSequenceFiles = [];
+let pendingSequenceFrames = [];
 let sequencePlacement = null;
 let sequencePlayback = null;
 let wallDraftPoint = null;
@@ -540,7 +540,7 @@ function renderSidebar() {
     ? sequences.map((sequence) => `
       <button class="asset-row" data-action="open-sequence" data-id="${escapeHtml(sequence.id)}" title="Testar sequência">
         <span class="asset-thumb" style="color:var(--violet);border-color:rgba(185,169,255,.28)">✦</span>
-        <span class="asset-row-copy"><strong>${escapeHtml(sequence.name)}</strong><small>${sequence.frames?.length || 0} frames · testar</small></span>
+        <span class="asset-row-copy"><strong>${escapeHtml(sequence.name)}</strong><small>${sequence.frames?.length || 0} frames · visualizar</small></span>
       </button>`).join("")
     : '<div class="empty-list">Nenhuma sequência criada ainda.</div>';
 
@@ -576,7 +576,7 @@ function renderToolbar() {
       wall: wallDraftPoint ? "Escolha o segundo ponto da barreira" : "Clique em dois pontos para desenhar uma barreira",
       light: "Clique no mapa para adicionar uma luz",
       darkness: "Arraste no mapa para criar uma área escura · clique para uma área padrão",
-      hotspot: "Clique no mapa para criar uma sequência narrativa",
+      hotspot: "Clique no mapa para posicionar uma animação clicável",
     };
     els.toolStatus.textContent = messages[tool] || messages.select;
   }
@@ -785,7 +785,7 @@ function renderInspector() {
         <div class="permission-summary">
           <div><span>Seu token</span><b>${state.permissions.moveOwnToken ? "movível" : "bloqueado"}</b></div>
           <div><span>Estados 1–9</span><b>${state.permissions.changeOwnImage ? "liberados" : "bloqueados"}</b></div>
-          <div><span>Hotspots</span><b>${state.permissions.interactSequences ? "liberados" : "bloqueados"}</b></div>
+          <div><span>Animações</span><b>${state.permissions.interactSequences ? "liberadas" : "bloqueadas"}</b></div>
         </div>
       </div>`;
 }
@@ -1683,18 +1683,131 @@ function renderFramePreview() {
     </div>`).join("");
 }
 
+const MAX_SEQUENCE_FRAMES = 12;
+
+function createSequenceFrameDraft() {
+  return {
+    id: makeId("sequence-frame"),
+    imageFile: null,
+    imageSrc: null,
+    imageName: "",
+    text: "",
+  };
+}
+
+function getSequenceFrameDraft(frameId) {
+  return pendingSequenceFrames.find((frame) => frame.id === frameId);
+}
+
+function syncSequenceFrameTexts() {
+  if (!els.sequenceFrameList) return;
+  els.sequenceFrameList.querySelectorAll("[data-sequence-frame-text]").forEach((textarea) => {
+    const frame = getSequenceFrameDraft(textarea.dataset.sequenceFrameText);
+    if (frame) frame.text = textarea.value;
+  });
+}
+
+function renderSequenceFrameEditor() {
+  syncSequenceFrameTexts();
+  els.sequenceFrameList.innerHTML = pendingSequenceFrames.map((frame, index) => {
+    const frameNumber = String(index + 1).padStart(2, "0");
+    const imagePreview = frame.imageSrc
+      ? `<img class="sequence-frame-image-preview has-image" src="${escapeHtml(frame.imageSrc)}" alt="Imagem do frame ${index + 1}" />`
+      : '<div class="sequence-frame-image-preview"><span>Sem imagem<br /><small>Opcional</small></span></div>';
+    const imageName = frame.imageName || "Nenhuma imagem escolhida";
+    return `
+      <article class="sequence-frame-card" data-sequence-frame-id="${escapeHtml(frame.id)}">
+        <div class="sequence-frame-head">
+          <div class="sequence-frame-title">
+            <span class="sequence-frame-number">${frameNumber}</span>
+            <strong>Frame ${index + 1}</strong>
+          </div>
+          <div class="sequence-frame-actions">
+            <button type="button" data-sequence-frame-move="${escapeHtml(frame.id)}" data-direction="-1" title="Mover frame para cima" aria-label="Mover frame ${index + 1} para cima" ${index === 0 ? "disabled" : ""}>↑</button>
+            <button type="button" data-sequence-frame-move="${escapeHtml(frame.id)}" data-direction="1" title="Mover frame para baixo" aria-label="Mover frame ${index + 1} para baixo" ${index === pendingSequenceFrames.length - 1 ? "disabled" : ""}>↓</button>
+            <button type="button" data-sequence-frame-remove="${escapeHtml(frame.id)}" title="Remover frame" aria-label="Remover frame ${index + 1}">×</button>
+          </div>
+        </div>
+        <div class="sequence-frame-grid">
+          <div class="sequence-frame-image">
+            ${imagePreview}
+            <div class="sequence-frame-image-copy"><strong>Imagem do frame</strong><small title="${escapeHtml(imageName)}">${escapeHtml(imageName)}</small></div>
+            <label class="sequence-frame-image-button">${frame.imageSrc ? "Trocar imagem" : "Adicionar imagem"}<input type="file" accept="image/png,image/jpeg,image/webp" data-sequence-frame-image="${escapeHtml(frame.id)}" /></label>
+          </div>
+          <label class="sequence-frame-text"><span>Frase deste frame <small>(opcional)</small></span><textarea class="text-input text-area sequence-frame-textarea" maxlength="500" data-sequence-frame-text="${escapeHtml(frame.id)}" placeholder="O que os Players leem neste momento?">${escapeHtml(frame.text)}</textarea></label>
+        </div>
+        <div class="sequence-frame-help"><span>${frame.imageSrc ? "Imagem pronta" : "Você pode deixar sem imagem"}</span><span>${frame.text.length}/500</span></div>
+      </article>`;
+  }).join("");
+}
+
+function addSequenceFrame() {
+  syncSequenceFrameTexts();
+  if (pendingSequenceFrames.length >= MAX_SEQUENCE_FRAMES) {
+    showToast(`Uma animação pode ter no máximo ${MAX_SEQUENCE_FRAMES} frames.`, true);
+    return;
+  }
+  pendingSequenceFrames.push(createSequenceFrameDraft());
+  renderSequenceFrameEditor();
+  const lastText = els.sequenceFrameList.querySelector(".sequence-frame-card:last-child [data-sequence-frame-text]");
+  lastText?.focus();
+}
+
+function removeSequenceFrame(frameId) {
+  syncSequenceFrameTexts();
+  pendingSequenceFrames = pendingSequenceFrames.filter((frame) => frame.id !== frameId);
+  renderSequenceFrameEditor();
+}
+
+function moveSequenceFrame(frameId, direction) {
+  syncSequenceFrameTexts();
+  const index = pendingSequenceFrames.findIndex((frame) => frame.id === frameId);
+  const target = index + Number(direction);
+  if (index < 0 || target < 0 || target >= pendingSequenceFrames.length) return;
+  [pendingSequenceFrames[index], pendingSequenceFrames[target]] = [pendingSequenceFrames[target], pendingSequenceFrames[index]];
+  renderSequenceFrameEditor();
+}
+
+async function handleSequenceImageChange(event) {
+  const input = event.target.closest("[data-sequence-frame-image]");
+  if (!input) return;
+  const frame = getSequenceFrameDraft(input.dataset.sequenceFrameImage);
+  const file = input.files?.[0];
+  input.value = "";
+  if (!frame || !file) return;
+  frame.imageFile = file;
+  frame.imageName = file.name;
+  try {
+    frame.imageSrc = await fileToDataUrl(file);
+    renderSequenceFrameEditor();
+  } catch (error) {
+    frame.imageFile = null;
+    frame.imageName = "";
+    renderSequenceFrameEditor();
+    showToast(error.message || "Não foi possível carregar a imagem do frame.", true);
+  }
+}
+
+function handleSequenceFrameInput(event) {
+  const textarea = event.target.closest("[data-sequence-frame-text]");
+  if (!textarea) return;
+  const frame = getSequenceFrameDraft(textarea.dataset.sequenceFrameText);
+  if (frame) frame.text = textarea.value;
+  const counter = textarea.closest(".sequence-frame-card")?.querySelector(".sequence-frame-help span:last-child");
+  if (counter) counter.textContent = `${textarea.value.length}/500`;
+}
+
 function openSequenceDialog() {
   els.sequenceName.value = "";
   els.sequenceSpeaker.value = "Narrador";
-  els.sequenceLines.value = "";
-  els.sequenceImages.value = "";
-  pendingSequenceFiles = [];
+  pendingSequenceFrames = [createSequenceFrameDraft()];
+  renderSequenceFrameEditor();
   els.sequenceDialog.showModal();
 }
 
 function openSequence(sequenceId) {
   if (!canInteractWithSequences()) {
-    showToast("O Mestre não liberou a interação com hotspots.", true);
+    showToast("O Mestre não liberou a interação com animações.", true);
     return;
   }
   const sequence = getSequence(sequenceId);
@@ -1828,22 +1941,35 @@ async function handleMapUpload(event) {
 async function handleSequenceSubmit(event) {
   if (event.submitter?.value === "cancel") return;
   event.preventDefault();
+  syncSequenceFrameTexts();
   const name = els.sequenceName.value.trim();
-  const lines = els.sequenceLines.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  if (!name || (!lines.length && !pendingSequenceFiles.length)) return;
+  if (!name) {
+    els.sequenceName.focus();
+    return;
+  }
+  const frames = pendingSequenceFrames
+    .map((frame) => ({ ...frame, text: String(frame.text || "").trim() }))
+    .filter((frame) => frame.imageSrc || frame.imageFile || frame.text)
+    .slice(0, MAX_SEQUENCE_FRAMES);
+  if (!frames.length) {
+    showToast("Adicione uma imagem ou frase em pelo menos um frame.", true);
+    return;
+  }
   try {
-    const uploaded = await Promise.all(pendingSequenceFiles.slice(0, 12).map((file) => fileToDataUrl(file)));
-    const length = Math.max(lines.length, uploaded.length, 1);
-    const frames = Array.from({ length }, (_, index) => ({ image: uploaded[index] || null, text: lines[index] || "" }));
-    const sequence = { id: makeId("sequence"), name, speaker: els.sequenceSpeaker.value.trim() || "Narrador", frames };
+    const preparedFrames = await Promise.all(frames.map(async (frame) => ({
+      image: frame.imageSrc || (frame.imageFile ? await fileToDataUrl(frame.imageFile) : null),
+      text: frame.text,
+    })));
+    const sequence = { id: makeId("sequence"), name, speaker: els.sequenceSpeaker.value.trim() || "Narrador", frames: preparedFrames };
     state.library.sequences.push(sequence);
     currentScene().hotspots.push({ id: makeId("hotspot"), sequenceId: sequence.id, x: sequencePlacement?.x || 0.5, y: sequencePlacement?.y || 0.5, visible: true });
     sequencePlacement = null;
     state.ui.activeTool = "select";
+    pendingSequenceFrames = [];
     saveState();
     els.sequenceDialog.close();
     renderAll();
-    showToast("Hotspot narrativo criado. Clique nele para testar a sequência.");
+    showToast("Animação criada. Clique no símbolo ✦ do mapa para testar.");
   } catch (error) {
     showToast(error.message || "Não foi possível criar a sequência.", true);
   }
@@ -1913,6 +2039,18 @@ function handleDelegatedClick(event) {
     els.newLightColor.value = state.ui.newLightColor;
     updateLightPresetStyles();
     saveState();
+    return;
+  }
+  const frameMove = event.target.closest("[data-sequence-frame-move]");
+  if (frameMove) {
+    event.preventDefault();
+    moveSequenceFrame(frameMove.dataset.sequenceFrameMove, frameMove.dataset.direction);
+    return;
+  }
+  const frameRemove = event.target.closest("[data-sequence-frame-remove]");
+  if (frameRemove) {
+    event.preventDefault();
+    removeSequenceFrame(frameRemove.dataset.sequenceFrameRemove);
     return;
   }
   const removeFrame = event.target.closest("[data-remove-frame]");
@@ -2066,11 +2204,15 @@ function init() {
     renderFramePreview();
   });
   els.addTokenState.addEventListener("click", () => els.tokenImages.click());
-  els.sequenceImages.addEventListener("change", () => {
-    pendingSequenceFiles = Array.from(els.sequenceImages.files || []);
-  });
+  els.addSequenceFrame.addEventListener("click", addSequenceFrame);
+  els.sequenceForm.addEventListener("change", handleSequenceImageChange);
+  els.sequenceForm.addEventListener("input", handleSequenceFrameInput);
   els.tokenForm.addEventListener("submit", handleTokenSubmit);
   els.sequenceForm.addEventListener("submit", handleSequenceSubmit);
+  els.sequenceDialog.addEventListener("close", () => {
+    pendingSequenceFrames = [];
+    sequencePlacement = null;
+  });
   els.sequencePlayerDialog.addEventListener("close", () => { sequencePlayback = null; });
   $("#closeSequence").addEventListener("click", () => els.sequencePlayerDialog.close());
   els.previousFrame.addEventListener("click", () => advanceSequence(-1));
