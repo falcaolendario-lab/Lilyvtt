@@ -9,7 +9,7 @@
       content="Beta de um tabletop web para RPG com cenas, tokens, permissões, luz e sequências narrativas."
     />
     <title>Tabletop RPG — Beta</title>
-    <link rel="stylesheet" href="styles.css?v=3" />
+    <link rel="stylesheet" href="styles.css?v=4" />
   </head>
   <body data-role="gm">
     <div class="app-shell">
@@ -186,6 +186,7 @@
                   </div>
                 </div>
                 <img id="mapImage" class="map-image" alt="Mapa da cena" hidden />
+                <div class="grid-layer" id="gridLayer" aria-hidden="true"></div>
                 <div class="scene-vignette"></div>
                 <svg id="wallsLayer" class="walls-layer" viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true"></svg>
                 <canvas id="lightingCanvas" class="lighting-canvas" aria-hidden="true"></canvas>
@@ -287,6 +288,6 @@
     </dialog>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="app.js?v=3" defer></script>
+    <script src="app.js?v=4" defer></script>
   </body>
 </html>
