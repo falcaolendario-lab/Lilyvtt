@@ -9,7 +9,7 @@
       content="Beta de um tabletop web para RPG com cenas, tokens, permissões, luz e sequências narrativas."
     />
     <title>Tabletop RPG — Beta</title>
-    <link rel="stylesheet" href="styles.css?v=5" />
+    <link rel="stylesheet" href="styles.css?v=6" />
   </head>
   <body data-role="gm">
     <div class="app-shell">
@@ -245,11 +245,15 @@
           <option value="player-1">Player 1</option>
           <option value="gm">Somente Mestre</option>
         </select>
-        <label class="field-label" for="tokenImages">Imagens/estados</label>
-        <input class="file-input" id="tokenImages" type="file" accept="image/png,image/jpeg,image/webp" multiple />
-        <small class="form-help">A ordem dos arquivos vira as teclas 1, 2, 3… Você pode adicionar novas imagens ao token salvo.</small>
+        <div class="state-editor-heading">
+          <div>
+            <label class="field-label">Estados visuais</label>
+            <small class="form-help">Cada cartão vira uma tecla de 1 a 9. O primeiro estado é usado como padrão.</small>
+          </div>
+          <button class="quiet-button add-state-button" id="addTokenState" type="button">＋ Adicionar</button>
+        </div>
+        <input class="file-input" id="tokenImages" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden />
         <div class="frame-preview" id="framePreview"></div>
-        <label class="check-row" id="replaceImagesRow" hidden><input type="checkbox" id="replaceImages" /> Substituir estados atuais</label>
         <div class="modal-actions">
           <button class="quiet-button" value="cancel">Cancelar</button>
           <button class="primary-button" id="saveToken" value="default">Salvar token</button>
@@ -296,6 +300,6 @@
     </dialog>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="app.js?v=5" defer></script>
+    <script src="app.js?v=6" defer></script>
   </body>
 </html>
