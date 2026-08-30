@@ -64,9 +64,8 @@ const els = {
   tokenName: $("#tokenName"),
   tokenOwner: $("#tokenOwner"),
   tokenImages: $("#tokenImages"),
+  addTokenState: $("#addTokenState"),
   framePreview: $("#framePreview"),
-  replaceImagesRow: $("#replaceImagesRow"),
-  replaceImages: $("#replaceImages"),
   saveToken: $("#saveToken"),
   sequenceDialog: $("#sequenceDialog"),
   sequenceForm: $("#sequenceForm"),
@@ -99,6 +98,8 @@ let suppressStageClick = false;
 let spaceHeld = false;
 let cameraSaveTimer = null;
 let toastTimer = null;
+let removedTokenImageKeys = new Set();
+let framePreviewUrls = [];
 
 if (new URLSearchParams(window.location.search).get("mode") === "player") {
   state.ui.role = "player";
@@ -1145,24 +1146,40 @@ function setTokenState(tokenId, stateKey) {
 function openTokenDialog(blueprintId = null) {
   editingBlueprintId = blueprintId;
   pendingTokenFiles = [];
+  removedTokenImageKeys = new Set();
   const blueprint = blueprintId ? getBlueprint(blueprintId) : null;
   els.tokenDialogTitle.textContent = blueprint ? "Editar token" : "Novo token";
   els.tokenName.value = blueprint?.name || "";
   els.tokenOwner.value = blueprint?.ownerId || PLAYER_ID;
   els.tokenImages.value = "";
-  els.replaceImages.checked = false;
-  els.replaceImagesRow.hidden = !blueprint;
   renderFramePreview();
   els.tokenDialog.showModal();
 }
 
 function renderFramePreview() {
   const blueprint = editingBlueprintId ? getBlueprint(editingBlueprintId) : null;
-  const existing = blueprint?.images || [];
-  const pending = pendingTokenFiles.map((file, index) => ({ key: `+${index + 1}`, name: file.name, src: null }));
-  const frames = [...existing, ...pending];
-  els.framePreview.innerHTML = frames.map((frame) => `
-    <div class="frame-preview-item">${frame.src ? `<img src="${escapeHtml(frame.src)}" alt="" />` : ""}<span>${escapeHtml(frame.key)}</span></div>`).join("");
+  framePreviewUrls.forEach((url) => URL.revokeObjectURL(url));
+  framePreviewUrls = [];
+  const existing = (blueprint?.images || []).filter((image) => !removedTokenImageKeys.has(String(image.key)));
+  const pending = pendingTokenFiles.map((file, index) => {
+    const src = URL.createObjectURL(file);
+    framePreviewUrls.push(src);
+    return { id: `pending:${index}`, key: `+${index + 1}`, name: file.name, src, label: "" };
+  });
+  const frames = [
+    ...existing.map((image) => ({ ...image, id: `existing:${image.key}`, name: image.fileName || "Estado salvo" })),
+    ...pending,
+  ];
+  els.framePreview.innerHTML = frames.map((frame, index) => `
+    <div class="frame-preview-item" data-frame-id="${escapeHtml(frame.id)}">
+      ${frame.src ? `<img src="${escapeHtml(frame.src)}" alt="Prévia do estado ${index + 1}" />` : '<span class="frame-preview-empty">＋</span>'}
+      <div class="frame-preview-copy">
+        <strong>Estado ${index + 1}</strong>
+        <small title="${escapeHtml(frame.name)}">${escapeHtml(frame.name)}</small>
+        <input class="frame-label-input" data-frame-label="${escapeHtml(frame.id)}" type="text" maxlength="30" value="${escapeHtml(frame.label || `Estado ${index + 1}`)}" aria-label="Nome do estado ${index + 1}" />
+      </div>
+      <button class="remove-state-button" type="button" data-remove-frame="${escapeHtml(frame.id)}" title="Remover estado" aria-label="Remover estado ${index + 1}">×</button>
+    </div>`).join("");
 }
 
 function openSequenceDialog() {
@@ -1241,19 +1258,32 @@ async function handleTokenSubmit(event) {
   if (!name) return;
   els.saveToken.disabled = true;
   try {
-    const uploaded = await Promise.all(pendingTokenFiles.slice(0, 9).map((file) => fileToDataUrl(file)));
     const existingBlueprint = editingBlueprintId ? getBlueprint(editingBlueprintId) : null;
-    let images = els.replaceImages.checked ? [] : [...(existingBlueprint?.images || [])];
+    const labels = new Map(Array.from(els.framePreview.querySelectorAll("[data-frame-label]")).map((input) => [input.dataset.frameLabel, input.value.trim()]));
+    const keptExisting = (existingBlueprint?.images || []).filter((image) => !removedTokenImageKeys.has(String(image.key)));
+    const uploaded = await Promise.all(pendingTokenFiles.slice(0, Math.max(0, 9 - keptExisting.length)).map((file) => fileToDataUrl(file)));
+    const images = [];
+    const previousToNextKey = new Map();
+    keptExisting.forEach((image) => {
+      if (images.length >= 9) return;
+      const nextKey = String(images.length + 1);
+      previousToNextKey.set(String(image.key), nextKey);
+      images.push({ ...image, key: nextKey, label: labels.get(`existing:${image.key}`) || image.label || `Estado ${nextKey}` });
+    });
     uploaded.forEach((src, index) => {
-      if (src && images.length < 9) {
-        images.push({ key: String(images.length + 1), label: `Estado ${images.length + 1}`, src, fileName: pendingTokenFiles[index]?.name || "imagem" });
-      }
+      if (!src || images.length >= 9) return;
+      const nextKey = String(images.length + 1);
+      images.push({ key: nextKey, label: labels.get(`pending:${index}`) || `Estado ${nextKey}`, src, fileName: pendingTokenFiles[index]?.name || "imagem" });
     });
 
     if (existingBlueprint) {
       existingBlueprint.name = name;
       existingBlueprint.ownerId = els.tokenOwner.value;
       existingBlueprint.images = images;
+      state.scenes.forEach((scene) => scene.tokens.forEach((token) => {
+        if (token.blueprintId !== existingBlueprint.id) return;
+        token.activeKey = previousToNextKey.get(String(token.activeKey)) || images[0]?.key || "1";
+      }));
     } else {
       const blueprint = { id: makeId("blueprint"), name, ownerId: els.tokenOwner.value, images, defaultSize: 0.08 };
       state.library.tokenBlueprints.push(blueprint);
@@ -1374,6 +1404,18 @@ function showToast(message, isError = false) {
 }
 
 function handleDelegatedClick(event) {
+  const removeFrame = event.target.closest("[data-remove-frame]");
+  if (removeFrame) {
+    event.preventDefault();
+    const frameId = removeFrame.dataset.removeFrame || "";
+    if (frameId.startsWith("pending:")) {
+      pendingTokenFiles.splice(Number(frameId.split(":")[1]), 1);
+    } else if (frameId.startsWith("existing:")) {
+      removedTokenImageKeys.add(frameId.slice("existing:".length));
+    }
+    renderFramePreview();
+    return;
+  }
   const action = event.target.closest("[data-action]");
   if (!action) return;
   const actionName = action.dataset.action;
@@ -1470,9 +1512,12 @@ function init() {
     showToast("Permissão atualizada para o modo Player.");
   }));
   els.tokenImages.addEventListener("change", () => {
-    pendingTokenFiles = Array.from(els.tokenImages.files || []);
+    const room = Math.max(0, 9 - pendingTokenFiles.length - (editingBlueprintId ? (getBlueprint(editingBlueprintId)?.images || []).filter((image) => !removedTokenImageKeys.has(String(image.key))).length : 0));
+    pendingTokenFiles = [...pendingTokenFiles, ...Array.from(els.tokenImages.files || []).slice(0, room)];
+    els.tokenImages.value = "";
     renderFramePreview();
   });
+  els.addTokenState.addEventListener("click", () => els.tokenImages.click());
   els.sequenceImages.addEventListener("change", () => {
     pendingSequenceFiles = Array.from(els.sequenceImages.files || []);
   });
