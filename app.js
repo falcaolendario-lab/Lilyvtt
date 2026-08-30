@@ -14,10 +14,17 @@ const PLAYER_ID = "player-1";
 const DEFAULT_LIGHT_COLOR = "#f4c783";
 const MAX_TOKEN_ANIMATION_FRAMES = 12;
 const TOKEN_ANIMATION_FRAME_MS = 560;
+const TOKEN_ACTION_ANIMATION_FRAME_MS = 120;
 const TOKEN_IMPACT_DURATION_MS = 720;
 const TOKEN_ATTACK_ACTIONS = {
   shot: { name: "Disparo", icon: "➜", hint: "à distância" },
   physical: { name: "Ataque físico", icon: "↯", hint: "corpo a corpo" },
+};
+const TOKEN_ANIMATION_TRIGGERS = {
+  manual: { label: "Manual", hint: "Ative pelo botão ou tecla H" },
+  shot: { label: "Disparo", hint: "Toca quando este ataque é escolhido" },
+  physical: { label: "Ataque físico", hint: "Toca quando este ataque é escolhido" },
+  impact: { label: "Impacto recebido", hint: "Toca quando o token é atingido" },
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -88,6 +95,7 @@ const els = {
   sequenceForm: $("#sequenceForm"),
   sequenceName: $("#sequenceName"),
   sequenceSpeaker: $("#sequenceSpeaker"),
+  sequenceTrigger: $("#sequenceTrigger"),
   addSequenceFrame: $("#addSequenceFrame"),
   sequenceFrameList: $("#sequenceFrameList"),
   sequencePlayerDialog: $("#sequencePlayerDialog"),
@@ -347,11 +355,16 @@ function normalizeTokenAnimations(animations) {
       }))
       .filter((frame) => frame.image || frame.text);
     if (!frames.length) return normalizedAnimations;
+    const trigger = Object.prototype.hasOwnProperty.call(TOKEN_ANIMATION_TRIGGERS, String(animation.trigger))
+      ? String(animation.trigger)
+      : "manual";
     normalizedAnimations.push({
       ...animation,
       id,
       name: String(animation.name || "Animação do token").trim() || "Animação do token",
       speaker: String(animation.speaker || "Narrador").trim() || "Narrador",
+      trigger,
+      frameDuration: clamp(Number(animation.frameDuration) || (trigger === "manual" ? TOKEN_ANIMATION_FRAME_MS : TOKEN_ACTION_ANIMATION_FRAME_MS), 60, 1200),
       frames,
     });
     return normalizedAnimations;
@@ -483,7 +496,21 @@ function getTokenAnimations(token) {
 
 function getTokenAnimation(token, animationId = null) {
   const animations = getTokenAnimations(token);
-  return animations.find((animation) => animation.id === animationId) || animations[0] || null;
+  if (animationId) return animations.find((animation) => animation.id === animationId) || null;
+  return animations.find((animation) => animation.trigger === "manual") || animations[0] || null;
+}
+
+function getTokenAnimationTrigger(animation) {
+  return TOKEN_ANIMATION_TRIGGERS[animation?.trigger] || TOKEN_ANIMATION_TRIGGERS.manual;
+}
+
+function getTokenAnimationForTrigger(token, trigger) {
+  return getTokenAnimations(token).find((animation) => animation.trigger === trigger) || null;
+}
+
+function getAnimationFrameDuration(animation, override = null) {
+  const fallback = animation?.trigger === "manual" ? TOKEN_ANIMATION_FRAME_MS : TOKEN_ACTION_ANIMATION_FRAME_MS;
+  return clamp(Number(override) || Number(animation?.frameDuration) || fallback, 60, 1200);
 }
 
 function countTokenAnimations() {
@@ -527,7 +554,8 @@ function stopTokenAnimation(tokenId, { restore = true, render = true, announce =
 function scheduleTokenAnimation(tokenId) {
   const playback = activeTokenAnimations.get(tokenId);
   if (!playback) return;
-  playback.timer = window.setTimeout(() => advanceTokenAnimation(tokenId), TOKEN_ANIMATION_FRAME_MS);
+  const animation = getTokenAnimation(getToken(tokenId), playback.animationId);
+  playback.timer = window.setTimeout(() => advanceTokenAnimation(tokenId), getAnimationFrameDuration(animation, playback.frameDuration));
 }
 
 function advanceTokenAnimation(tokenId) {
@@ -545,10 +573,11 @@ function advanceTokenAnimation(tokenId) {
   scheduleTokenAnimation(tokenId);
 }
 
-function playTokenAnimation(tokenId, animationId = null) {
+function playTokenAnimation(tokenId, animationId = null, options = {}) {
   const token = getToken(tokenId);
   if (!token) return;
-  if (!canPlayTokenAnimation(token)) {
+  const { bypassPermission = false, announce = true, render = true, frameDuration = null } = options;
+  if (!bypassPermission && !canPlayTokenAnimation(token)) {
     showToast("O Mestre não liberou a animação deste token.", true);
     return;
   }
@@ -562,13 +591,27 @@ function playTokenAnimation(tokenId, animationId = null) {
     animationId: animation.id,
     frameIndex: 0,
     returnStateKey: String(token.activeKey || getBlueprint(token.blueprintId)?.images?.[0]?.key || "1"),
+    frameDuration: getAnimationFrameDuration(animation, frameDuration),
     timer: null,
   });
-  renderCanvasObjects();
-  renderFooter();
-  renderInspector();
-  showToast(`${animation.name} ativada · volta ao estado anterior no fim.`);
+  if (render) {
+    renderCanvasObjects();
+    renderFooter();
+    renderInspector();
+  }
+  if (announce) showToast(`${animation.name} ativada · volta ao estado anterior no fim.`);
   scheduleTokenAnimation(tokenId);
+}
+
+function playAttackAnimation(token, trigger) {
+  const animation = getTokenAnimationForTrigger(token, trigger);
+  if (!animation) return;
+  playTokenAnimation(token.id, animation.id, {
+    bypassPermission: true,
+    announce: false,
+    render: false,
+    frameDuration: Math.min(getAnimationFrameDuration(animation), 240),
+  });
 }
 
 function getTokenAttackAction(attackType) {
@@ -630,6 +673,7 @@ function setArmedAttack(tokenId, attackType) {
     renderToolbar();
     renderCanvasObjects();
     renderFooter();
+    renderInspector();
     showToast("Ação cancelada.");
     return;
   }
@@ -638,6 +682,7 @@ function setArmedAttack(tokenId, attackType) {
   renderToolbar();
   renderCanvasObjects();
   renderFooter();
+  renderInspector();
   showToast(`${attack.name} preparado. Arraste do token até o alvo.`);
 }
 
@@ -651,6 +696,7 @@ function clearArmedAttack({ render = true } = {}) {
     renderToolbar();
     renderCanvasObjects();
     renderFooter();
+    renderInspector();
   }
 }
 
@@ -739,6 +785,8 @@ function executeTokenAttack(attackerId, targetId, attackType) {
     showToast("O Mestre não liberou ataques para este token.", true);
     return;
   }
+  playAttackAnimation(attacker, attackType);
+  playAttackAnimation(target, "impact");
   const previousImpact = activeTokenImpacts.get(target.id);
   if (previousImpact) window.clearTimeout(previousImpact.timer);
   const impact = { id: makeId("impact"), attackerId: attacker.id, attackType, timer: null };
@@ -860,7 +908,7 @@ function renderSidebar() {
     ? tokenAnimations.map(({ blueprint, animation }) => `
       <button class="asset-row" data-action="edit-blueprint-animation" data-id="${escapeHtml(blueprint.id)}" data-animation-id="${escapeHtml(animation.id)}" title="Editar animação do token">
         <span class="asset-thumb" style="color:var(--violet);border-color:rgba(185,169,255,.28)">✦</span>
-        <span class="asset-row-copy"><strong>${escapeHtml(blueprint.name)} · ${escapeHtml(animation.name)}</strong><small>${animation.frames?.length || 0}/12 frames · editar</small></span>
+        <span class="asset-row-copy"><strong>${escapeHtml(blueprint.name)} · ${escapeHtml(animation.name)}</strong><small>${animation.frames?.length || 0}/12 frames · ${escapeHtml(getTokenAnimationTrigger(animation).label)}</small></span>
       </button>`).join("")
     : '<div class="empty-list">Nenhuma animação salva. Selecione um token no mapa para criar a primeira.</div>';
 
@@ -1088,7 +1136,7 @@ function renderInspector() {
     const animationRows = animations.length
       ? animations.map((animation) => `
           <div class="animation-row">
-            <div class="animation-row-copy"><strong>${escapeHtml(animation.name)}</strong><small>${animation.frames.length}/12 frames${playback?.animationId === animation.id ? ` · <span class="animation-active-label">em andamento</span>` : ""}</small></div>
+            <div class="animation-row-copy"><strong>${escapeHtml(animation.name)}</strong><small>${animation.frames.length}/12 frames · ${escapeHtml(getTokenAnimationTrigger(animation).label)}${playback?.animationId === animation.id ? ` · <span class="animation-active-label">em andamento</span>` : ""}</small></div>
             <div class="animation-row-actions">
               <button class="quiet-button animation-play-button" data-action="play-token-animation" data-id="${escapeHtml(token.id)}" data-animation-id="${escapeHtml(animation.id)}" title="Ativar animação">▶ Ativar</button>
               <button class="icon-button animation-edit-button" data-action="edit-token-animation" data-id="${escapeHtml(token.id)}" data-animation-id="${escapeHtml(animation.id)}" title="Editar animação" aria-label="Editar animação">···</button>
@@ -1934,6 +1982,8 @@ function setTool(tool) {
   wallDraftPoint = null;
   renderToolbar();
   renderCanvasObjects();
+  renderFooter();
+  renderInspector();
   els.stage.focus();
 }
 
@@ -2220,6 +2270,7 @@ function openBlueprintAnimationDialog(blueprintId, animationId = null, tokenId =
   els.sequenceDialogTitle.textContent = animation ? "Editar animação do token" : "Nova animação do token";
   els.sequenceName.value = animation?.name || "";
   els.sequenceSpeaker.value = animation?.speaker || "Narrador";
+  els.sequenceTrigger.value = animation?.trigger || "manual";
   pendingSequenceFrames = animation?.frames?.length
     ? animation.frames.slice(0, MAX_TOKEN_ANIMATION_FRAMES).map((frame, index) => ({
       id: makeId("sequence-frame"),
@@ -2393,12 +2444,22 @@ async function handleSequenceSubmit(event) {
     if (!blueprint) return;
     if (!Array.isArray(blueprint.animations)) blueprint.animations = [];
     const isEditing = Boolean(editingTokenAnimation.animationId);
+    const trigger = Object.prototype.hasOwnProperty.call(TOKEN_ANIMATION_TRIGGERS, els.sequenceTrigger.value)
+      ? els.sequenceTrigger.value
+      : "manual";
     const savedAnimation = {
       id: editingTokenAnimation.animationId || makeId("animation"),
       name,
       speaker: els.sequenceSpeaker.value.trim() || "Narrador",
+      trigger,
+      frameDuration: trigger === "manual" ? TOKEN_ANIMATION_FRAME_MS : TOKEN_ACTION_ANIMATION_FRAME_MS,
       frames: preparedFrames,
     };
+    if (trigger !== "manual") {
+      blueprint.animations = blueprint.animations.map((item) => item.id !== savedAnimation.id && item.trigger === trigger
+        ? { ...item, trigger: "manual", frameDuration: TOKEN_ANIMATION_FRAME_MS }
+        : item);
+    }
     const animationIndex = blueprint.animations.findIndex((animation) => animation.id === savedAnimation.id);
     if (animationIndex >= 0) blueprint.animations[animationIndex] = savedAnimation;
     else blueprint.animations.push(savedAnimation);
@@ -2558,6 +2619,8 @@ function handleKeydown(event) {
     state.ui.activeTool = "select";
     renderToolbar();
     renderCanvasObjects();
+    renderFooter();
+    renderInspector();
     return;
   }
   if (currentRole() === "gm" && event.key.toLowerCase() === "v") setTool("select");
