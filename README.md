@@ -1,4 +1,4 @@
-# Tabletop RPG — Beta local
+# LilyVTT — Beta local + online
 
 Protótipo de um VTT leve com foco em uma experiência simples como uma mesa compartilhada.
 
@@ -23,7 +23,9 @@ Protótipo de um VTT leve com foco em uma experiência simples como uma mesa com
 - áreas escuras manuais, texturizadas e reposicionáveis;
 - hotspots narrativos;
 - sequências com imagens e frases;
-- armazenamento local para preservar as preparações do Mestre.
+- armazenamento local para preservar as preparações do Mestre;
+- sala online com WebSocket, código de sala e credencial privada do Mestre;
+- estado público filtrado para os Players, sem tokens ocultos ou controles do Mestre.
 
 ## Teste rápido
 
@@ -39,8 +41,19 @@ Protótipo de um VTT leve com foco em uma experiência simples como uma mesa com
 
 No modo Mestre, selecione um token para mostrar os quatro cantos de redimensionamento. Desative `Visível para Players` no Inspector para ocultá-lo sem removê-lo da cena.
 
-## Próximo marco
+## Sala online
 
-O próximo passo é substituir o armazenamento local por uma sala online com link real, aprovação de entrada, sincronização de eventos e validação de permissões no servidor.
+Para testar a sala completa localmente:
+
+```bash
+npm install
+npm start
+```
+
+Depois abra `http://localhost:8787/`. O Mestre cria uma sala online automaticamente e o botão `Compartilhar player` gera um link para outro dispositivo. O servidor salva as salas em `server/data/rooms.json`.
+
+O GitHub Pages continua sendo a versão estática. Para conectá-lo a um servidor publicado, abra o site com `?server=https://URL-DO-SERVICO`; o link de Player gerado pelo Mestre já carregará essa configuração. O `render.yaml` contém a configuração inicial para publicar o servidor como Web Service Node.
+
+O armazenamento JSON é adequado para o beta e para desenvolvimento. Em produção, use disco persistente ou banco externo para não perder salas ao recriar o serviço.
 
 Consulte [ARCHITECTURE.md](ARCHITECTURE.md) para o modelo de dados e o plano da sala online.
