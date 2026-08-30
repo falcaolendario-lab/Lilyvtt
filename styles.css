@@ -261,13 +261,22 @@ h1, h2, p { margin: 0; }
 .modal-header h2 { margin-top: 4px; font-size: 17px; }
 .modal-close { margin-top: -4px; font-size: 20px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
-.check-row { display: flex; align-items: center; gap: 7px; margin-top: 10px; color: var(--muted); font-size: 10px; cursor: pointer; }
-.check-row input { accent-color: var(--cyan-strong); }
-.frame-preview { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; margin-top: 12px; }
-.frame-preview:empty { display: none; }
-.frame-preview-item { position: relative; aspect-ratio: 1; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2); }
-.frame-preview-item img { width: 100%; height: 100%; object-fit: cover; }
-.frame-preview-item span { position: absolute; left: 3px; bottom: 2px; padding: 1px 3px; border-radius: 3px; color: var(--text); background: rgba(0,0,0,.65); font-size: 8px; }
+.state-editor-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-top: 15px; }
+.state-editor-heading .field-label { margin: 0; }
+.state-editor-heading .form-help { display: block; max-width: 245px; margin-top: 5px; }
+.add-state-button { flex: 0 0 auto; padding: 7px 9px; }
+.frame-preview { display: grid; gap: 7px; margin-top: 12px; max-height: 276px; overflow: auto; padding-right: 2px; }
+.frame-preview:empty::before { content: "Nenhum estado adicionado ainda."; display: block; padding: 13px 10px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); font-size: 10px; text-align: center; }
+.frame-preview-item { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 48px; padding: 5px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }
+.frame-preview-item img, .frame-preview-empty { width: 40px; height: 40px; display: grid; place-items: center; object-fit: contain; border-radius: 5px; background: #0b1116; }
+.frame-preview-empty { color: var(--faint); font-size: 16px; }
+.frame-preview-copy { min-width: 0; }
+.frame-preview-copy strong { display: block; color: var(--cyan); font-size: 10px; }
+.frame-preview-copy small { display: block; overflow: hidden; margin-top: 3px; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.frame-label-input { width: 100%; margin-top: 4px; padding: 4px 5px; border: 1px solid var(--line); border-radius: 5px; color: var(--text); background: #0b1116; font-size: 9px; }
+.frame-label-input:focus { outline: 1px solid var(--cyan-strong); border-color: var(--cyan-strong); }
+.remove-state-button { width: 24px; height: 24px; padding: 0; border: 1px solid var(--line); border-radius: 5px; color: var(--muted); background: transparent; cursor: pointer; }
+.remove-state-button:hover { border-color: rgba(236,141,154,.5); color: var(--rose); background: rgba(236,141,154,.08); }
 
 .sequence-player { width: min(760px, calc(100vw - 28px)); background: transparent; border: 0; box-shadow: none; }
 .sequence-player-card { position: relative; overflow: hidden; display: grid; grid-template-columns: 1.15fr .85fr; min-height: 360px; border: 1px solid rgba(185,169,255,.27); border-radius: 15px; background: #11151e; box-shadow: 0 30px 90px rgba(0,0,0,.62); }
