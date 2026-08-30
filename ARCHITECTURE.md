@@ -61,6 +61,8 @@ Mapa
 
 As barreiras e tokens usam coordenadas normalizadas (`0` a `1`) para continuarem corretos quando a câmera mudar de tamanho. A câmera é persistida por cena: arrastar o fundo move o enquadramento, a roda do mouse aplica zoom centrado no cursor e o botão `Centro` restaura `x: 0`, `y: 0`, `zoom: 1`. Cada barreira tem regras independentes para movimento, visão e luz.
 
+O grid quadrado é uma camada própria sobre o mapa, com linhas finas e baixa opacidade. Assim ele continua visível na preparação do Mestre e na mesa do Player sem esconder os detalhes da imagem.
+
 O beta possui uma máscara de visão baseada em polígonos de visibilidade. Ela usa as mesmas barreiras para bloquear movimento, visão e luz, com queda suave (`falloff`) nas fontes de luz. A máscara continua separada do fog estático, que será adicionado como uma camada própria.
 
 ## Modos de acesso
