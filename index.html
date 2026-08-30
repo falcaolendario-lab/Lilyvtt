@@ -9,7 +9,7 @@
       content="Beta de um tabletop web para RPG com cenas, tokens, permissões, luz e animações temporárias."
     />
     <title>Tabletop RPG — Beta</title>
-    <link rel="stylesheet" href="styles.css?v=12" />
+    <link rel="stylesheet" href="styles.css?v=13" />
   </head>
   <body data-role="gm">
     <div class="app-shell">
@@ -126,6 +126,15 @@
               <span><strong>Escuridão ambiente</strong><output id="darknessOpacityValue">82%</output></span>
               <input id="darknessOpacity" type="range" min="0" max="100" value="82" step="1" />
             </label>
+
+            <div class="section-label"><span>LEITURA DA IMAGEM</span></div>
+            <p class="muted-copy">Analisa a luminosidade do mapa e cria uma camada suave de claros e escuros. É uma estimativa visual, não substitui paredes nem luzes reais.</p>
+            <div class="analysis-actions">
+              <button class="quiet-button full-width" id="analyzeMapLighting" type="button">✦ Analisar imagem</button>
+              <button class="quiet-button full-width" id="createSuggestedLights" type="button" disabled>＋ Sugerir luzes claras</button>
+              <button class="quiet-button full-width" id="clearMapAnalysis" type="button" disabled>× Remover análise</button>
+            </div>
+            <small class="map-analysis-status" id="mapAnalysisStatus">Nenhuma análise feita para este mapa.</small>
 
             <div class="section-label"><span>FERRAMENTAS</span></div>
             <div class="tool-explainer">
@@ -347,6 +356,6 @@
     </dialog>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="app.js?v=12" defer></script>
+    <script src="app.js?v=13" defer></script>
   </body>
 </html>
