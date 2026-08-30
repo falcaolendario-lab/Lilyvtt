@@ -9,7 +9,7 @@
       content="Beta de um tabletop web para RPG com cenas, tokens, permissões, luz e sequências narrativas."
     />
     <title>Tabletop RPG — Beta</title>
-    <link rel="stylesheet" href="styles.css?v=6" />
+    <link rel="stylesheet" href="styles.css?v=7" />
   </head>
   <body data-role="gm">
     <div class="app-shell">
@@ -117,14 +117,24 @@
               <input type="checkbox" id="visionMask" checked />
               <span class="switch-ui"></span>
             </label>
+            <label class="switch-row">
+              <span><strong>Prévia da visão dos Players</strong><small>O Mestre vê a mesma escuridão e luz da mesa.</small></span>
+              <input type="checkbox" id="gmLightingPreview" checked />
+              <span class="switch-ui"></span>
+            </label>
+            <label class="range-row" for="darknessOpacity">
+              <span><strong>Escuridão ambiente</strong><output id="darknessOpacityValue">82%</output></span>
+              <input id="darknessOpacity" type="range" min="0" max="100" value="82" step="1" />
+            </label>
 
             <div class="section-label"><span>FERRAMENTAS</span></div>
             <div class="tool-explainer">
               <div><span class="tool-key">W</span><span>Barreira</span></div>
               <div><span class="tool-key">L</span><span>Luz</span></div>
+              <div><span class="tool-key">D</span><span>Escuridão</span></div>
               <div><span class="tool-key">H</span><span>Hotspot</span></div>
             </div>
-            <p class="muted-copy">As barreiras ficam invisíveis para os players e controlam movimento, visão e luz de forma independente.</p>
+            <p class="muted-copy">As barreiras ficam invisíveis para os players e controlam movimento, visão e luz. Áreas escuras podem ser colocadas, movidas e excluídas pelo Mestre.</p>
           </section>
 
           <section class="side-panel" id="accessPanel">
@@ -165,6 +175,7 @@
               <button class="tool-button active" data-tool="select" title="Selecionar (V)"><span>↖</span><em>Selecionar</em></button>
               <button class="tool-button" data-tool="wall" title="Desenhar barreira (W)"><span>╱</span><em>Barreira</em></button>
               <button class="tool-button" data-tool="light" title="Adicionar luz (L)"><span>◌</span><em>Luz</em></button>
+              <button class="tool-button" data-tool="darkness" title="Criar área escura (D)"><span>◼</span><em>Escuridão</em></button>
               <button class="tool-button" data-tool="hotspot" title="Adicionar hotspot (H)"><span>✦</span><em>Hotspot</em></button>
             </div>
             <div class="canvas-context">
@@ -172,6 +183,7 @@
               <span class="tool-status" id="toolStatus">Arraste o fundo para mover · roda para zoom</span>
             </div>
             <div class="toolbar-group right-tools">
+              <button class="tool-button subtle gm-only" id="toggleLightingPreview" title="Alternar prévia da visão dos Players" aria-pressed="true"><span>◐</span><em>Visão Player</em></button>
               <button class="tool-button subtle gm-only panel-toggle" id="toggleLeftPanel" title="Abrir ou fechar Biblioteca" aria-controls="gmSidebar" aria-expanded="true"><span>☷</span><em>Biblioteca</em></button>
               <button class="tool-button subtle gm-only panel-toggle" id="toggleRightPanel" title="Abrir ou fechar Inspector" aria-controls="inspector" aria-expanded="true"><span>◫</span><em>Inspector</em></button>
               <button class="tool-button subtle" id="resetView" title="Recentrar mapa e restaurar zoom"><span>⌂</span><em>Centro</em></button>
@@ -195,10 +207,12 @@
                 <div class="scene-vignette"></div>
                 <svg id="wallsLayer" class="walls-layer" viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true"></svg>
                 <canvas id="lightingCanvas" class="lighting-canvas" aria-hidden="true"></canvas>
-                <div id="lightsLayer" class="lights-layer" aria-hidden="true"></div>
+                <div id="darknessLayer" class="darkness-layer"></div>
+                <div id="lightsLayer" class="lights-layer"></div>
                 <div id="hotspotsLayer" class="hotspots-layer"></div>
                 <div id="tokensLayer" class="tokens-layer"></div>
                 <div class="wall-draft" id="wallDraft" hidden></div>
+                <div class="darkness-draft" id="darknessDraft" hidden></div>
               </div>
               <div class="stage-empty-hint" id="stageHint">Arraste um token da Biblioteca ou adicione um mapa para começar.</div>
             </div>
@@ -300,6 +314,6 @@
     </dialog>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="app.js?v=6" defer></script>
+    <script src="app.js?v=7" defer></script>
   </body>
 </html>
