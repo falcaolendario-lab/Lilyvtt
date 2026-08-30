@@ -9,7 +9,7 @@
       content="Beta de um tabletop web para RPG com cenas, tokens, permissões, luz e animações temporárias."
     />
     <title>Tabletop RPG — Beta</title>
-    <link rel="stylesheet" href="styles.css?v=10" />
+    <link rel="stylesheet" href="styles.css?v=11" />
   </head>
   <body data-role="gm">
     <div class="app-shell">
@@ -303,9 +303,17 @@
         <input class="text-input" id="sequenceName" type="text" maxlength="60" placeholder="Ex.: Golpe, dano ou transformação" required />
         <label class="field-label" for="sequenceSpeaker">Legenda / autor (opcional)</label>
         <input class="text-input" id="sequenceSpeaker" type="text" maxlength="40" placeholder="Narrador" />
+        <label class="field-label" for="sequenceTrigger">Quando tocar</label>
+        <select class="text-input" id="sequenceTrigger">
+          <option value="manual">Manual — botão do token ou tecla H</option>
+          <option value="shot">Disparo — entra ao escolher essa ação</option>
+          <option value="physical">Ataque físico — entra ao escolher essa ação</option>
+          <option value="impact">Impacto recebido — entra quando o token for atingido</option>
+        </select>
+        <small class="form-help sequence-trigger-help">Para cada ação, o primeiro clipe marcado é usado automaticamente. Sem clipe marcado, o impacto visual padrão continua funcionando.</small>
         <div class="sequence-builder-intro">
           <div class="eyebrow">COMO FUNCIONA</div>
-          <p>Um cartão = um momento do token. Ao ativar, os frames passam automaticamente; depois do último, o token volta ao estado que tinha antes.</p>
+          <p>Um cartão = um momento do token. Ao tocar, os frames passam automaticamente; depois do último, o token volta ao estado que tinha antes.</p>
         </div>
         <div class="sequence-builder-heading">
           <div>
@@ -339,6 +347,6 @@
     </dialog>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="app.js?v=10" defer></script>
+    <script src="app.js?v=11" defer></script>
   </body>
 </html>
