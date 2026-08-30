@@ -254,6 +254,7 @@ function normalizeLights(lights) {
       id,
       ...point,
       radius: clamp(Number(light.radius) || 0.2, 0.02, 2),
+      falloff: clamp(Number(light.falloff) || 0.72, 0.2, 0.95),
       color: String(light.color || "#f4c783"),
     });
     return normalizedLights;
@@ -621,14 +622,27 @@ function renderLighting() {
   }
   canvas.hidden = false;
   context.globalCompositeOperation = "source-over";
-  context.fillStyle = "rgba(4, 7, 12, 0.9)";
+  context.fillStyle = "rgba(4, 7, 12, 0.94)";
   context.fillRect(0, 0, width, height);
 
   const sources = [];
   scene.tokens
     .filter((token) => token.ownerId === currentMemberId() && Number(token.visionRange) > 0)
-    .forEach((token) => sources.push({ x: token.x, y: token.y, range: token.visionRange, kind: "vision" }));
-  scene.lights.forEach((light) => sources.push({ x: light.x, y: light.y, range: light.radius, kind: "light" }));
+    .forEach((token) => sources.push({
+      x: token.x,
+      y: token.y,
+      range: token.visionRange,
+      falloff: 0.58,
+      kind: "vision",
+    }));
+  scene.lights.forEach((light) => sources.push({
+    x: light.x,
+    y: light.y,
+    range: light.radius,
+    falloff: Number(light.falloff) || 0.72,
+    color: light.color || "#f4c783",
+    kind: "light",
+  }));
 
   sources.forEach((source) => {
     const points = visibilityPolygon(source, scene.walls);
@@ -636,6 +650,8 @@ function renderLighting() {
     const sourceX = source.x * width;
     const sourceY = source.y * height;
     const radius = source.range * Math.min(width, height);
+    const falloff = clamp(Number(source.falloff) || 0.7, 0.2, 0.95);
+    const fullLightStop = clamp(1 - falloff, 0.2, 0.82);
     context.save();
     context.beginPath();
     points.forEach((point, index) => {
@@ -648,19 +664,47 @@ function renderLighting() {
     context.clip();
     const gradient = context.createRadialGradient(sourceX, sourceY, 0, sourceX, sourceY, Math.max(1, radius));
     gradient.addColorStop(0, "rgba(0,0,0,1)");
-    gradient.addColorStop(0.68, "rgba(0,0,0,0.98)");
+    gradient.addColorStop(fullLightStop, "rgba(0,0,0,1)");
+    gradient.addColorStop(Math.min(0.94, fullLightStop + falloff * 0.7), "rgba(0,0,0,0.72)");
     gradient.addColorStop(1, "rgba(0,0,0,0)");
     context.globalCompositeOperation = "destination-out";
     context.fillStyle = gradient;
     context.fillRect(0, 0, width, height);
+
+    if (source.kind === "light") {
+      const color = hexToRgb(source.color);
+      const glow = context.createRadialGradient(sourceX, sourceY, 0, sourceX, sourceY, Math.max(1, radius * 0.78));
+      glow.addColorStop(0, `rgba(${color.r}, ${color.g}, ${color.b}, 0.16)`);
+      glow.addColorStop(0.42, `rgba(${color.r}, ${color.g}, ${color.b}, 0.07)`);
+      glow.addColorStop(1, `rgba(${color.r}, ${color.g}, ${color.b}, 0)`);
+      context.globalCompositeOperation = "source-over";
+      context.fillStyle = glow;
+      context.fillRect(0, 0, width, height);
+    }
     context.restore();
   });
 }
 
+function hexToRgb(value) {
+  const match = String(value || "").trim().match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (!match) return { r: 244, g: 199, b: 131 };
+  const hex = match[1].length === 3
+    ? match[1].split("").map((part) => part + part).join("")
+    : match[1];
+  return {
+    r: parseInt(hex.slice(0, 2), 16),
+    g: parseInt(hex.slice(2, 4), 16),
+    b: parseInt(hex.slice(4, 6), 16),
+  };
+}
+
 function visibilityPolygon(source, walls) {
-  const blockingWalls = walls.filter((wall) => source.kind === "vision" ? wall.blocksVision !== false : wall.blocksLight !== false);
+  const blockingWalls = walls.filter((wall) => {
+    const blocks = source.kind === "vision" ? wall.blocksVision !== false : wall.blocksLight !== false;
+    return blocks && wall.a && wall.b && Math.hypot(wall.a.x - wall.b.x, wall.a.y - wall.b.y) >= 0.004;
+  });
   const angles = [];
-  const sampleCount = 96;
+  const sampleCount = 160;
   for (let index = 0; index < sampleCount; index += 1) {
     angles.push((Math.PI * 2 * index) / sampleCount);
   }
@@ -988,7 +1032,7 @@ function handleStageClick(event) {
     return;
   }
   if (tool === "light") {
-    currentScene().lights.push({ id: makeId("light"), x: point.x, y: point.y, radius: 0.2, color: "#f4c783" });
+    currentScene().lights.push({ id: makeId("light"), x: point.x, y: point.y, radius: 0.2, falloff: 0.72, color: "#f4c783" });
     saveState();
     renderAll();
     showToast("Luz adicionada. Ela será bloqueada pelas barreiras.");
