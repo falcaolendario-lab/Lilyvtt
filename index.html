@@ -9,7 +9,7 @@
       content="Beta de um tabletop web para RPG com cenas, tokens, permissões, luz e sequências narrativas."
     />
     <title>Tabletop RPG — Beta</title>
-    <link rel="stylesheet" href="styles.css?v=4" />
+    <link rel="stylesheet" href="styles.css?v=5" />
   </head>
   <body data-role="gm">
     <div class="app-shell">
@@ -51,7 +51,10 @@
               <div class="eyebrow">CONTROL ROOM</div>
               <h1>Preparar mesa</h1>
             </div>
-            <span class="live-pill"><span></span> local</span>
+            <div class="panel-actions">
+              <span class="live-pill"><span></span> local</span>
+              <button class="panel-close" id="closeLeftPanel" title="Fechar Biblioteca" aria-label="Fechar Biblioteca">×</button>
+            </div>
           </div>
 
           <nav class="side-tabs" aria-label="Ferramentas do Mestre">
@@ -169,6 +172,8 @@
               <span class="tool-status" id="toolStatus">Arraste o fundo para mover · roda para zoom</span>
             </div>
             <div class="toolbar-group right-tools">
+              <button class="tool-button subtle gm-only panel-toggle" id="toggleLeftPanel" title="Abrir ou fechar Biblioteca" aria-controls="gmSidebar" aria-expanded="true"><span>☷</span><em>Biblioteca</em></button>
+              <button class="tool-button subtle gm-only panel-toggle" id="toggleRightPanel" title="Abrir ou fechar Inspector" aria-controls="inspector" aria-expanded="true"><span>◫</span><em>Inspector</em></button>
               <button class="tool-button subtle" id="resetView" title="Recentrar mapa e restaurar zoom"><span>⌂</span><em>Centro</em></button>
               <button class="tool-button subtle" id="clearSelection" title="Limpar seleção"><span>×</span><em>Limpar</em></button>
             </div>
@@ -217,7 +222,10 @@
               <div class="eyebrow">INSPECTOR</div>
               <h2 id="inspectorTitle">Sala</h2>
             </div>
-            <span class="inspector-signal"></span>
+            <div class="inspector-actions">
+              <span class="inspector-signal"></span>
+              <button class="panel-close" id="closeRightPanel" title="Fechar Inspector" aria-label="Fechar Inspector">×</button>
+            </div>
           </div>
           <div id="inspectorContent" class="inspector-content"></div>
         </aside>
@@ -288,6 +296,6 @@
     </dialog>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="app.js?v=4" defer></script>
+    <script src="app.js?v=5" defer></script>
   </body>
 </html>
