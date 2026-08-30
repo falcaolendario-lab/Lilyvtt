@@ -9,7 +9,7 @@
  */
 
 const STORAGE_KEY = "tabletop-rpg-beta-state-v1";
-const STATE_SCHEMA_VERSION = 4;
+const STATE_SCHEMA_VERSION = 5;
 const PLAYER_ID = "player-1";
 const DEFAULT_LIGHT_COLOR = "#f4c783";
 const MAX_TOKEN_ANIMATION_FRAMES = 12;
@@ -74,10 +74,6 @@ const els = {
   gmLightingPreview: $("#gmLightingPreview"),
   darknessOpacity: $("#darknessOpacity"),
   darknessOpacityValue: $("#darknessOpacityValue"),
-  analyzeMapLighting: $("#analyzeMapLighting"),
-  createSuggestedLights: $("#createSuggestedLights"),
-  clearMapAnalysis: $("#clearMapAnalysis"),
-  mapAnalysisStatus: $("#mapAnalysisStatus"),
   newLightColor: $("#newLightColor"),
   selectionAvatar: $("#selectionAvatar"),
   selectionName: $("#selectionName"),
@@ -128,16 +124,16 @@ let activePan = null;
 let activeLightDrag = null;
 let activeDarknessDrag = null;
 let activeDarknessDraw = null;
+let activeTokenResize = null;
 let suppressStageClick = false;
 let spaceHeld = false;
 let cameraSaveTimer = null;
+let tokenTransformSaveTimer = null;
 let toastTimer = null;
 let removedTokenImageKeys = new Set();
 let framePreviewUrls = [];
 const activeTokenAnimations = new Map();
 const activeTokenImpacts = new Map();
-let mapAnalysisTexture = null;
-let mapAnalysisTextureSource = null;
 
 if (new URLSearchParams(window.location.search).get("mode") === "player") {
   state.ui.role = "player";
@@ -206,7 +202,6 @@ function initialState() {
         walls: [],
         lights: [],
         darknessZones: [],
-        mapAnalysis: null,
         hotspots: [],
       },
     ],
@@ -267,11 +262,12 @@ function normalizeTokens(tokens) {
       id,
       blueprintId: String(token.blueprintId || ""),
       ownerId: String(token.ownerId || PLAYER_ID),
+      visibleToPlayers: token.visibleToPlayers !== false && token.visible !== false,
       ...normalizePoint(token),
       size: clamp(Number(token.size) || 0.08, 0.025, 0.5),
-     activeKey: String(token.activeKey || "1"),
+      activeKey: String(token.activeKey || "1"),
       rotation: Number.isFinite(Number(token.rotation)) ? clamp(Number(token.rotation), -180, 180) : 0,
-     visionRange: clamp(Number(token.visionRange) || 0, 0, 2),
+      visionRange: clamp(Number(token.visionRange) || 0, 0, 2),
     });
     return normalizedTokens;
   }, []);
@@ -347,25 +343,6 @@ function normalizeDarknessZones(zones) {
   }, []);
 }
 
-function normalizeMapAnalysis(value) {
-  if (!value || typeof value !== "object") return null;
-  const cols = clamp(Math.round(Number(value.cols) || 64), 16, 96);
-  const rows = clamp(Math.round(Number(value.rows) || 48), 16, 96);
-  const source = Array.isArray(value.luminance) ? value.luminance : [];
-  const luminance = Array.from({ length: cols * rows }, (_, index) => {
-    const sample = Number(source[index]);
-    return clamp(Number.isFinite(sample) ? sample : 0.5, 0, 1);
-  });
- return {
-   mapAssetId: String(value.mapAssetId || ""),
-   cols,
-   rows,
-   luminance,
-    sourceWidth: Number(value.sourceWidth) || cols,
-    sourceHeight: Number(value.sourceHeight) || rows,
- };
-}
-
 function normalizeTokenAnimations(animations) {
   const seenIds = new Set();
   return (Array.isArray(animations) ? animations : []).reduce((normalizedAnimations, animation) => {
@@ -428,22 +405,27 @@ function normalizeState(value) {
 
   normalized.ui.newLightColor = normalizeHexColor(normalized.ui.newLightColor);
 
-  normalized.scenes = normalized.scenes.map((scene) => ({
-    ...scene,
-    camera: normalizeCamera(scene.camera),
-    tokens: normalizeTokens((Array.isArray(scene.tokens) ? scene.tokens : [])
-      .filter((token) => token?.id !== "token-example-player" && token?.id !== "token-example-gm")),
-    walls: normalizeWalls(Array.isArray(scene.walls) ? scene.walls : []),
-    lights: normalizeLights(Array.isArray(scene.lights) ? scene.lights : []),
-    darknessZones: normalizeDarknessZones(Array.isArray(scene.darknessZones) ? scene.darknessZones : []),
-    mapAnalysis: normalizeMapAnalysis(scene.mapAnalysis),
-    hotspots: (Array.isArray(scene.hotspots) ? scene.hotspots : [])
-      .filter((hotspot) => hotspot?.id !== "hotspot-example")
-      .map((hotspot) => ({ ...hotspot, ...normalizePoint(hotspot), visible: hotspot.visible !== false })),
-    globalIllumination: Boolean(scene.globalIllumination),
-    visionMaskEnabled: scene.visionMaskEnabled !== false,
-    darknessOpacity: Number.isFinite(Number(scene.darknessOpacity)) ? clamp(Number(scene.darknessOpacity), 0, 0.98) : 0.82,
-  }));
+  normalized.scenes = normalized.scenes.map((scene) => {
+    const sceneWithoutLegacyAnalysis = { ...scene };
+    delete sceneWithoutLegacyAnalysis.mapAnalysis;
+    return {
+      ...sceneWithoutLegacyAnalysis,
+      camera: normalizeCamera(scene.camera),
+      tokens: normalizeTokens((Array.isArray(scene.tokens) ? scene.tokens : [])
+        .filter((token) => token?.id !== "token-example-player" && token?.id !== "token-example-gm")),
+      walls: normalizeWalls(Array.isArray(scene.walls) ? scene.walls : []),
+      // As luzes marcadas pelo analisador pertencem ao beta anterior. A partir
+      // daqui, somente luzes colocadas pelo Mestre continuam na cena.
+      lights: normalizeLights(Array.isArray(scene.lights) ? scene.lights : []).filter((light) => light.generatedFromMap !== true),
+      darknessZones: normalizeDarknessZones(Array.isArray(scene.darknessZones) ? scene.darknessZones : []),
+      hotspots: (Array.isArray(scene.hotspots) ? scene.hotspots : [])
+        .filter((hotspot) => hotspot?.id !== "hotspot-example")
+        .map((hotspot) => ({ ...hotspot, ...normalizePoint(hotspot), visible: hotspot.visible !== false })),
+      globalIllumination: Boolean(scene.globalIllumination),
+      visionMaskEnabled: scene.visionMaskEnabled !== false,
+      darknessOpacity: Number.isFinite(Number(scene.darknessOpacity)) ? clamp(Number(scene.darknessOpacity), 0, 0.98) : 0.82,
+    };
+  });
 
   normalized.schemaVersion = STATE_SCHEMA_VERSION;
 
@@ -464,20 +446,28 @@ function saveState() {
   }
 }
 
+function syncStateFromAnotherTab(event) {
+  if (event.key !== STORAGE_KEY || !event.newValue) return;
+  try {
+    const localUi = state.ui;
+    const incomingState = normalizeState(JSON.parse(event.newValue));
+    state = incomingState;
+    state.ui = {
+      ...incomingState.ui,
+      ...localUi,
+      role: launchedAsPlayer ? "player" : localUi.role,
+      panels: { ...incomingState.ui.panels, ...localUi.panels },
+    };
+    renderAll();
+  } catch (error) {
+    console.warn("Não foi possível sincronizar a sala nesta aba.", error);
+  }
+}
+
+window.addEventListener("storage", syncStateFromAnotherTab);
+
 function currentScene() {
   return state.scenes.find((scene) => scene.id === state.activeSceneId) || state.scenes[0];
-}
-
-function currentMapAsset() {
-  const scene = currentScene();
-  return state.library.maps.find((map) => map.id === scene.mapAssetId) || null;
-}
-
-function currentMapAnalysis() {
-  const scene = currentScene();
-  return scene.mapAnalysis && scene.mapAnalysis.mapAssetId === scene.mapAssetId
-    ? scene.mapAnalysis
-    : null;
 }
 
 function currentCamera() {
@@ -844,6 +834,10 @@ function canMoveToken(token) {
   return Boolean(state.permissions.moveOwnToken && token.ownerId === currentMemberId());
 }
 
+function isTokenVisibleToCurrentRole(token) {
+  return currentRole() === "gm" || token?.visibleToPlayers !== false;
+}
+
 function canChangeTokenImage(token) {
   if (currentRole() === "gm") return true;
   return Boolean(state.permissions.changeOwnImage && token.ownerId === currentMemberId());
@@ -876,6 +870,9 @@ function renderShell() {
     wallDraftPoint = null;
     state.ui.selectedLightId = null;
     state.ui.selectedDarknessId = null;
+    if (state.ui.selectedTokenId && !isTokenVisibleToCurrentRole(getToken(state.ui.selectedTokenId))) {
+      state.ui.selectedTokenId = null;
+    }
   }
   els.body.dataset.role = role;
   els.body.classList.toggle("linked-player", launchedAsPlayer);
@@ -975,18 +972,6 @@ function renderSidebar() {
   els.gmLightingPreview.checked = state.ui.gmLightingPreview !== false;
   els.newLightColor.value = normalizeHexColor(state.ui.newLightColor);
   updateLightPresetStyles();
-  const mapAsset = currentMapAsset();
-  const mapAnalysis = currentMapAnalysis();
-  if (els.analyzeMapLighting) els.analyzeMapLighting.disabled = !mapAsset;
-  if (els.createSuggestedLights) els.createSuggestedLights.disabled = !mapAnalysis;
-  if (els.clearMapAnalysis) els.clearMapAnalysis.disabled = !mapAnalysis;
-  if (els.mapAnalysisStatus) {
-    els.mapAnalysisStatus.textContent = !mapAsset
-      ? "Adicione um mapa para habilitar a análise."
-      : mapAnalysis
-        ? "Análise ativa · " + mapAnalysis.cols + " × " + mapAnalysis.rows + " amostras."
-        : "Nenhuma análise feita para este mapa.";
-  }
   els.darknessOpacity.value = String(darknessOpacity);
   els.darknessOpacityValue.textContent = `${darknessOpacity}%`;
   $$('[data-permission]').forEach((input) => {
@@ -1059,7 +1044,7 @@ function renderCanvasObjects() {
   // deixar hotspots narrativos soltos no mapa depois da migração do beta.
   els.hotspotsLayer.innerHTML = "";
 
-  els.tokensLayer.innerHTML = scene.tokens.map((token) => {
+  els.tokensLayer.innerHTML = scene.tokens.filter(isTokenVisibleToCurrentRole).map((token) => {
     const blueprint = getBlueprint(token.blueprintId) || { name: "Token", images: [] };
     const animationFrame = getActiveTokenAnimationFrame(token);
     const image = animationFrame?.image ? { src: animationFrame.image } : getTokenImage(token);
@@ -1074,6 +1059,14 @@ function renderCanvasObjects() {
     const impactMarkup = impact
       ? `<span class="token-impact-effect token-impact-${escapeHtml(impact.attackType)}" aria-hidden="true"></span>`
       : "";
+    const transformHandles = currentRole() === "gm" && isSelected
+      ? `<span class="token-transform-ui" aria-hidden="true">
+          <span class="token-resize-handle token-resize-nw" data-token-resize="nw"></span>
+          <span class="token-resize-handle token-resize-ne" data-token-resize="ne"></span>
+          <span class="token-resize-handle token-resize-sw" data-token-resize="sw"></span>
+          <span class="token-resize-handle token-resize-se" data-token-resize="se"></span>
+        </span>`
+      : "";
     return `
       <div class="token ${isSelected ? "selected" : ""} ${isOwned ? "player-owned" : ""} ${playback ? "token-animation-playing" : ""} ${armedAttack?.attackerId === token.id ? "attack-source" : ""} ${activeAttackDrag?.targetId === token.id && activeAttackDrag?.attackerId !== token.id ? "attack-target" : ""} ${impact ? `token-impact-active token-impact-${escapeHtml(impact.attackType)}` : ""}" data-token-id="${escapeHtml(token.id)}" style="left:${token.x * 100}%;top:${token.y * 100}%;--token-size:${(token.size || blueprint.defaultSize || 0.08) * 100}%;transform:translate(-50%,-50%) rotate(${Number(token.rotation) || 0}deg)" tabindex="0" role="button" aria-label="Token ${escapeHtml(blueprint.name)}">
         <span class="token-body">${contents}</span>
@@ -1081,6 +1074,7 @@ function renderCanvasObjects() {
         ${animationFrame?.text ? `<span class="token-animation-caption">${escapeHtml(animationFrame.text)}</span>` : ""}
         ${playback && animation ? `<span class="token-animation-badge">▶ ${playback.frameIndex + 1}/${animation.frames.length}</span>` : ""}
         <span class="token-tag">${escapeHtml(blueprint.name)}</span>
+        ${transformHandles}
       </div>`;
   }).join("");
 
@@ -1101,7 +1095,7 @@ function renderFooter() {
   if (selectedLight) {
     els.selectionAvatar.textContent = "✦";
     els.selectionName.textContent = "Luz selecionada";
-    els.selectionDetail.textContent = `${Math.round(selectedLight.radius * 100)}% de alcance · arraste para mover · Delete para excluir`;
+    els.selectionDetail.textContent = `${Math.round(selectedLight.radius * 100)}% de alcance · arraste para mover · Delete ou Ctrl+X para excluir`;
     els.hotkeyStrip.innerHTML = '<span class="eyebrow">LUZ</span><span class="hotkey-placeholder">Abra o Inspector para ajustar alcance, cor e intensidade</span>';
     return;
   }
@@ -1110,12 +1104,13 @@ function renderFooter() {
   if (selectedDarkness) {
     els.selectionAvatar.textContent = "◼";
     els.selectionName.textContent = "Área escura selecionada";
-    els.selectionDetail.textContent = `${Math.round(selectedDarkness.opacity * 100)}% de opacidade · arraste para mover · Delete para excluir`;
+    els.selectionDetail.textContent = `${Math.round(selectedDarkness.opacity * 100)}% de opacidade · arraste para mover · Delete ou Ctrl+X para excluir`;
     els.hotkeyStrip.innerHTML = '<span class="eyebrow">ESCURIDÃO</span><span class="hotkey-placeholder">Abra o Inspector para ajustar opacidade</span>';
     return;
   }
 
-  const token = state.ui.selectedTokenId ? getToken(state.ui.selectedTokenId) : null;
+  const selectedToken = state.ui.selectedTokenId ? getToken(state.ui.selectedTokenId) : null;
+  const token = selectedToken && isTokenVisibleToCurrentRole(selectedToken) ? selectedToken : null;
   if (!token) {
     els.selectionAvatar.textContent = "—";
     els.selectionName.textContent = "Nenhum token selecionado";
@@ -1133,7 +1128,7 @@ function renderFooter() {
   const playback = activeTokenAnimations.get(token.id);
   const animation = getTokenAnimation(token, playback?.animationId);
   const animationStatus = playback && animation ? ` · animando ${playback.frameIndex + 1}/${animation.frames.length}` : "";
-  els.selectionDetail.textContent = `${owner} · estado ${token.activeKey || "1"}${animationStatus} · ${canMoveToken(token) ? "pode mover" : "somente visualização"}`;
+  els.selectionDetail.textContent = `${owner} · estado ${token.activeKey || "1"}${animationStatus} · ${canMoveToken(token) ? "pode mover" : "somente visualização"} · Ctrl+X exclui`;
   const images = blueprint.images || [];
   const animations = getTokenAnimations(token);
   const canEditToken = canChangeTokenImage(token);
@@ -1226,7 +1221,7 @@ function renderInspector() {
       <div class="inspector-card">
         <div class="eyebrow">TOKEN INSTANCE</div>
         <div class="inspector-title">${escapeHtml(blueprint.name)}</div>
-        <div class="inspector-meta">Esta instância pertence à cena atual. O modelo e seus estados continuam salvos na Biblioteca do Mestre.</div>
+        <div class="inspector-meta">Arraste os cantos para redimensionar ou use a roda do mouse sobre o token. O modelo e seus estados continuam salvos na Biblioteca do Mestre.</div>
         <div class="permission-summary">
           <div><span>Dono</span><b>${escapeHtml(state.members.find((member) => member.id === token.ownerId)?.name || "Mestre")}</b></div>
           <div><span>Posição</span><b>${Math.round(token.x * 100)}% / ${Math.round(token.y * 100)}%</b></div>
@@ -1240,7 +1235,13 @@ function renderInspector() {
           <span><strong>Rotação</strong><output data-token-output="rotation">${Math.round(Number(token.rotation) || 0)}°</output></span>
           <input type="range" min="-180" max="180" step="1" value="${Math.round(Number(token.rotation) || 0)}" data-token-control="rotation" data-token-id="${escapeHtml(token.id)}" />
         </label>
-     </div>
+        <label class="switch-row inspector-switch-row">
+          <span><strong>Visível para Players</strong><small>Desative para esconder este token sem removê-lo da cena.</small></span>
+          <input type="checkbox" ${token.visibleToPlayers !== false ? "checked" : ""} data-token-control="visibleToPlayers" data-token-id="${escapeHtml(token.id)}" />
+          <span class="switch-ui"></span>
+        </label>
+        <button class="quiet-button full-width delete-button" data-action="delete-token" data-id="${escapeHtml(token.id)}">Excluir token da cena</button>
+      </div>
       <div class="inspector-card">
         <div class="eyebrow">IMAGE STATES</div>
         <div class="inspector-meta">Use as teclas numéricas no canvas ou selecione um estado.</div>
@@ -1306,62 +1307,6 @@ function renderInspector() {
       </div>`;
 }
 
-function getMapImageRect(width, height, sourceWidth = null, sourceHeight = null) {
-  const naturalWidth = Number(sourceWidth) || Number(els.mapImage?.naturalWidth) || width;
-  const naturalHeight = Number(sourceHeight) || Number(els.mapImage?.naturalHeight) || height;
-  const scale = Math.min(width / naturalWidth, height / naturalHeight);
-  const imageWidth = naturalWidth * scale;
-  const imageHeight = naturalHeight * scale;
-  return {
-    x: (width - imageWidth) / 2,
-    y: (height - imageHeight) / 2,
-    width: imageWidth,
-    height: imageHeight,
-  };
-}
-
-function getMapAnalysisTexture(analysis) {
-  if (!analysis) return null;
-  if (mapAnalysisTexture && mapAnalysisTextureSource === analysis) return mapAnalysisTexture;
-  const texture = document.createElement("canvas");
-  texture.width = analysis.cols;
-  texture.height = analysis.rows;
-  const textureContext = texture.getContext("2d");
-  const imageData = textureContext.createImageData(analysis.cols, analysis.rows);
-  analysis.luminance.forEach((luminance, index) => {
-    const offset = index * 4;
-    if (luminance < 0.44) {
-      const darkness = Math.round(clamp((0.44 - luminance) / 0.44, 0, 1) * 190);
-      imageData.data[offset] = 2;
-      imageData.data[offset + 1] = 6;
-      imageData.data[offset + 2] = 12;
-      imageData.data[offset + 3] = darkness;
-    } else if (luminance > 0.72) {
-      const glow = Math.round(clamp((luminance - 0.72) / 0.28, 0, 1) * 62);
-      imageData.data[offset] = 244;
-      imageData.data[offset + 1] = 199;
-      imageData.data[offset + 2] = 131;
-      imageData.data[offset + 3] = glow;
-    }
-  });
-  textureContext.putImageData(imageData, 0, 0);
-  mapAnalysisTexture = texture;
-  mapAnalysisTextureSource = analysis;
-  return texture;
-}
-
-function drawMapAnalysis(context, width, height, analysis) {
-  const texture = getMapAnalysisTexture(analysis);
-  if (!texture) return;
-  const rect = getMapImageRect(width, height, analysis.sourceWidth, analysis.sourceHeight);
-  context.save();
-  context.globalCompositeOperation = "source-over";
-  context.globalAlpha = 0.86;
-  context.imageSmoothingEnabled = true;
-  context.drawImage(texture, rect.x, rect.y, rect.width, rect.height);
-  context.restore();
-}
-
 function renderLighting() {
   const canvas = els.lightingCanvas;
   if (!canvas || !els.stage) return;
@@ -1380,26 +1325,11 @@ function renderLighting() {
   const scene = currentScene();
   const ambientOpacity = clamp(Number.isFinite(Number(scene.darknessOpacity)) ? Number(scene.darknessOpacity) : 0.82, 0, 0.98);
   const shouldMask = isLightingPreviewActive() && scene.visionMaskEnabled !== false && !scene.globalIllumination && ambientOpacity > 0.001;
-  const mapAnalysis = currentMapAnalysis();
-  const shouldRenderAnalysis = Boolean(mapAnalysis);
-  if (!shouldMask && !shouldRenderAnalysis) {
-    canvas.hidden = true;
-    return;
-  }
-  canvas.hidden = false;
-  if (shouldMask) {
-    context.globalCompositeOperation = "source-over";
-    context.fillStyle = "rgba(4, 7, 12, " + ambientOpacity + ")";
-    context.fillRect(0, 0, width, height);
-  }
-  if (shouldRenderAnalysis) drawMapAnalysis(context, width, height, mapAnalysis);
-  if (!shouldMask) return;
-
   const sources = [];
   scene.tokens
     .filter((token) => {
       const isVisibleOwner = currentRole() === "player" ? token.ownerId === currentMemberId() : token.ownerId !== "gm";
-      return isVisibleOwner && Number(token.visionRange) > 0;
+      return isVisibleOwner && isTokenVisibleToCurrentRole(token) && Number(token.visionRange) > 0;
     })
     .forEach((token) => sources.push({
       x: token.x,
@@ -1418,6 +1348,17 @@ function renderLighting() {
     color: normalizeHexColor(light.color),
     kind: "light",
   }));
+
+  // Sem uma fonte de visão, o mapa continua legível. A máscara só entra
+  // quando existe uma visão/luz que possa abrir o campo de visão.
+  if (!shouldMask || !sources.length) {
+    canvas.hidden = true;
+    return;
+  }
+  canvas.hidden = false;
+  context.globalCompositeOperation = "source-over";
+  context.fillStyle = "rgba(4, 7, 12, " + ambientOpacity + ")";
+  context.fillRect(0, 0, width, height);
 
   sources.forEach((source) => {
     const points = visibilityPolygon(source, scene.walls);
@@ -1461,137 +1402,6 @@ function renderLighting() {
     }
     context.restore();
   });
-}
-
-function loadMapImage(dataUrl) {
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error("Não foi possível ler a imagem do mapa."));
-    image.src = dataUrl;
-  });
-}
-
-function buildMapAnalysis(image, mapAssetId) {
-  const sourceWidth = Number(image.naturalWidth || image.width) || 1;
-  const sourceHeight = Number(image.naturalHeight || image.height) || 1;
-  const cols = 64;
-  const rows = clamp(Math.round(cols * sourceHeight / sourceWidth), 24, 72);
-  const sampleCanvas = document.createElement("canvas");
-  sampleCanvas.width = cols;
-  sampleCanvas.height = rows;
-  const sampleContext = sampleCanvas.getContext("2d", { willReadFrequently: true });
-  sampleContext.drawImage(image, 0, 0, cols, rows);
- const pixels = sampleContext.getImageData(0, 0, cols, rows).data;
- const luminance = [];
-  for (let index = 0; index < pixels.length; index += 4) {
-   const alpha = pixels[index + 3] / 255;
-   const value = (pixels[index] * 0.2126 + pixels[index + 1] * 0.7152 + pixels[index + 2] * 0.0722) / 255;
-   luminance.push(alpha < 0.05 ? 0.5 : value);
-  }
- return { mapAssetId, cols, rows, luminance, sourceWidth, sourceHeight };
-}
-
-function createSuggestedLightsFromAnalysis(analysis) {
-  if (!analysis) return 0;
-  const scene = currentScene();
-  const candidates = [];
-  const getSample = (column, row) => {
-    if (column < 0 || row < 0 || column >= analysis.cols || row >= analysis.rows) return null;
-    return analysis.luminance[row * analysis.cols + column];
-  };
-  for (let row = 1; row < analysis.rows - 1; row += 1) {
-    for (let column = 1; column < analysis.cols - 1; column += 1) {
-      const luminance = getSample(column, row);
-      if (luminance < 0.78) continue;
-      const neighbors = [];
-      for (let rowOffset = -1; rowOffset <= 1; rowOffset += 1) {
-        for (let columnOffset = -1; columnOffset <= 1; columnOffset += 1) {
-          if (!rowOffset && !columnOffset) continue;
-          neighbors.push(getSample(column + columnOffset, row + rowOffset));
-        }
-      }
-      const averageNeighbor = neighbors.reduce((sum, value) => sum + (value || 0), 0) / neighbors.length;
-      if (luminance - averageNeighbor < 0.045) continue;
-      candidates.push({ column, row, luminance });
-   }
- }
-  candidates.sort((a, b) => b.luminance - a.luminance);
-  const selected = [];
- const imageRect = getMapImageRect(1, 1, analysis.sourceWidth, analysis.sourceHeight);
-  candidates.forEach((candidate) => {
-    if (selected.length >= 8) return;
-   const x = imageRect.x + ((candidate.column + 0.5) / analysis.cols) * imageRect.width;
-   const y = imageRect.y + ((candidate.row + 0.5) / analysis.rows) * imageRect.height;
-    const tooClose = selected.some((light) => Math.hypot(light.x - x, light.y - y) < 0.12);
-    const existing = scene.lights.some((light) => Math.hypot(light.x - x, light.y - y) < 0.09);
-    if (tooClose || existing) return;
-    selected.push({ x, y, luminance: candidate.luminance });
-  });
-  selected.forEach((candidate) => {
-    scene.lights.push({
-      id: makeId("light"),
-      x: candidate.x,
-      y: candidate.y,
-      radius: clamp(0.14 + (candidate.luminance - 0.78) * 0.45, 0.14, 0.24),
-      falloff: 0.78,
-      intensity: 0.48,
-      color: "#f4c783",
-      providesVision: true,
-      generatedFromMap: true,
-    });
-  });
-  return selected.length;
-}
-
-async function analyzeMapLighting({ suggestLights = false, announce = true } = {}) {
- if (currentRole() !== "gm") return;
-  const targetScene = currentScene();
-  const mapAsset = currentMapAsset();
- if (!mapAsset) {
-    showToast("Adicione um mapa antes de analisá-lo.", true);
-    return;
- }
- try {
-   if (els.analyzeMapLighting) els.analyzeMapLighting.disabled = true;
-   const image = await loadMapImage(mapAsset.dataUrl);
-   const analysis = buildMapAnalysis(image, mapAsset.id);
-    if (currentRole() !== "gm" || currentScene().id !== targetScene.id || currentScene().mapAssetId !== mapAsset.id) return;
-    targetScene.mapAnalysis = analysis;
-    mapAnalysisTexture = null;
-    mapAnalysisTextureSource = null;
-   const suggestedCount = suggestLights ? createSuggestedLightsFromAnalysis(analysis) : 0;
-   saveState();
-   renderAll();
-   if (announce) showToast(suggestedCount ? `Mapa analisado · ${suggestedCount} luzes sugeridas foram adicionadas.` : "Mapa analisado · claros e escuros estimados.");
- } catch (error) {
-    if (els.analyzeMapLighting && currentRole() === "gm") els.analyzeMapLighting.disabled = false;
-   showToast(error.message || "Não foi possível analisar o mapa.", true);
-  }
-}
-
-async function createSuggestedLights() {
-  if (currentRole() !== "gm") return;
-  const analysis = currentMapAnalysis();
-  if (!analysis) {
-    await analyzeMapLighting({ suggestLights: true });
-    return;
-  }
-  const count = createSuggestedLightsFromAnalysis(analysis);
-  saveState();
-  renderAll();
-  showToast(count ? `${count} luzes sugeridas adicionadas. Revise ou exclua as que não fizerem sentido.` : "Não encontrei pontos claros contrastantes para sugerir luzes.", !count);
-}
-
-function clearMapAnalysis() {
-  if (currentRole() !== "gm") return;
-  if (!currentScene().mapAnalysis) return;
-  currentScene().mapAnalysis = null;
-  mapAnalysisTexture = null;
-  mapAnalysisTextureSource = null;
-  saveState();
-  renderAll();
-  showToast("A análise visual foi removida. Luzes sugeridas continuam editáveis na cena.");
 }
 
 function hexToRgb(value) {
@@ -1818,6 +1628,89 @@ function updateDarknessSelectionStyles() {
   });
 }
 
+function updateTokenTransformPresentation(token, element = null) {
+  const target = element || els.tokensLayer.querySelector(`[data-token-id="${CSS.escape(token.id)}"]`);
+  if (target) {
+    target.style.setProperty("--token-size", `${token.size * 100}%`);
+    target.style.transform = `translate(-50%, -50%) rotate(${Number(token.rotation) || 0}deg)`;
+  }
+  const sizeOutput = els.inspectorContent.querySelector('[data-token-output="size"]');
+  const rotationOutput = els.inspectorContent.querySelector('[data-token-output="rotation"]');
+  if (sizeOutput) sizeOutput.textContent = `${Math.round(token.size * 100)}%`;
+  if (rotationOutput) rotationOutput.textContent = `${Math.round(Number(token.rotation) || 0)}°`;
+}
+
+function scheduleTokenTransformSave() {
+  window.clearTimeout(tokenTransformSaveTimer);
+  tokenTransformSaveTimer = window.setTimeout(() => saveState(), 180);
+}
+
+function handleTokenWheel(event) {
+  if (currentRole() !== "gm") return;
+  const element = event.currentTarget;
+  const token = getToken(element.dataset.tokenId);
+  if (!token) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (state.ui.selectedTokenId !== token.id) selectToken(token.id, { refreshObjects: false });
+  token.size = clamp(token.size * Math.pow(1.0015, -event.deltaY), 0.025, 0.5);
+  updateTokenTransformPresentation(token, element);
+  renderFooter();
+  scheduleTokenTransformSave();
+}
+
+function startTokenResize(event, token, element) {
+  if (currentRole() !== "gm" || state.ui.selectedTokenId !== token.id) return false;
+  const pointer = clientToStagePixels(event);
+  const camera = currentCamera();
+  const center = {
+    x: camera.x + token.x * pointer.width * camera.zoom,
+    y: camera.y + token.y * pointer.height * camera.zoom,
+  };
+  activeTokenResize = {
+    tokenId: token.id,
+    element,
+    pointerId: event.pointerId,
+    center,
+    startDistance: Math.max(1, Math.hypot(pointer.x - center.x, pointer.y - center.y)),
+    startSize: token.size,
+    moved: false,
+  };
+  element.setPointerCapture?.(event.pointerId);
+  window.addEventListener("pointermove", handleTokenResize);
+  window.addEventListener("pointerup", finishTokenResize);
+  window.addEventListener("pointercancel", finishTokenResize);
+  event.preventDefault();
+  event.stopPropagation();
+  return true;
+}
+
+function handleTokenResize(event) {
+  if (!activeTokenResize || event.pointerId !== activeTokenResize.pointerId) return;
+  const token = getToken(activeTokenResize.tokenId);
+  if (!token) return;
+  const pointer = clientToStagePixels(event);
+  const distance = Math.max(1, Math.hypot(pointer.x - activeTokenResize.center.x, pointer.y - activeTokenResize.center.y));
+  token.size = clamp(activeTokenResize.startSize * (distance / activeTokenResize.startDistance), 0.025, 0.5);
+  activeTokenResize.moved = true;
+  updateTokenTransformPresentation(token, activeTokenResize.element);
+  renderFooter();
+  event.preventDefault();
+}
+
+function finishTokenResize(event) {
+  if (!activeTokenResize || (event?.pointerId != null && event.pointerId !== activeTokenResize.pointerId)) return;
+  window.removeEventListener("pointermove", handleTokenResize);
+  window.removeEventListener("pointerup", finishTokenResize);
+  window.removeEventListener("pointercancel", finishTokenResize);
+  const moved = activeTokenResize.moved;
+  activeTokenResize = null;
+  if (moved) {
+    saveState();
+    renderInspector();
+  }
+}
+
 function updateLightPresetStyles() {
   const selectedColor = normalizeHexColor(state.ui.newLightColor);
   $$('[data-light-preset]').forEach((button) => {
@@ -1829,6 +1722,7 @@ function updateLightPresetStyles() {
 
 function bindTokenInteractions() {
   $$(".token").forEach((element) => {
+    element.addEventListener("wheel", handleTokenWheel, { passive: false });
     element.addEventListener("click", (event) => {
       event.stopPropagation();
       const token = getToken(element.dataset.tokenId);
@@ -1850,6 +1744,11 @@ function bindTokenInteractions() {
       event.stopPropagation();
       const token = getToken(element.dataset.tokenId);
       if (!token) return;
+      if (event.target.closest("[data-token-resize]")) {
+        selectToken(token.id, { refreshObjects: false });
+        startTokenResize(event, token, element);
+        return;
+      }
       if (armedAttack) {
         selectToken(token.id, { refreshObjects: false });
         if (token.id === armedAttack.attackerId) startAttackDrag(event, token);
@@ -2174,6 +2073,35 @@ function clearSelection() {
   renderInspector();
 }
 
+function deleteToken(tokenId = state.ui.selectedTokenId) {
+  if (currentRole() !== "gm" || !tokenId) return;
+  const scene = currentScene();
+  const index = scene.tokens.findIndex((token) => token.id === tokenId);
+  if (index < 0) return;
+  const token = scene.tokens[index];
+  stopTokenAnimation(token.id, { render: false, announce: false });
+  activeTokenImpacts.forEach((impact, targetId) => {
+    if (targetId !== token.id && impact.attackerId !== token.id) return;
+    window.clearTimeout(impact.timer);
+    activeTokenImpacts.delete(targetId);
+  });
+  if (armedAttack?.attackerId === token.id || activeAttackDrag?.attackerId === token.id || activeAttackDrag?.targetId === token.id) {
+    clearArmedAttack({ render: false });
+  }
+  scene.tokens.splice(index, 1);
+  state.ui.selectedTokenId = null;
+  saveState();
+  renderAll();
+  showToast("Token excluído da cena.");
+}
+
+function deleteSelection() {
+  if (currentRole() !== "gm") return;
+  if (state.ui.selectedTokenId) return deleteToken();
+  if (state.ui.selectedLightId) return deleteLight();
+  if (state.ui.selectedDarknessId) return deleteDarkness();
+}
+
 function deleteLight(lightId = state.ui.selectedLightId) {
   if (currentRole() !== "gm" || !lightId) return;
   const scene = currentScene();
@@ -2245,6 +2173,14 @@ function handleTokenControl(event) {
   const property = input.dataset.tokenControl;
   if (property === "size") token.size = clamp(Number(input.value) / 100, 0.025, 0.5);
   if (property === "rotation") token.rotation = clamp(Number(input.value), -180, 180);
+  if (property === "visibleToPlayers") token.visibleToPlayers = input.checked;
+  if (property === "visibleToPlayers") {
+    saveState();
+    renderCanvasObjects();
+    renderFooter();
+    renderInspector();
+    return;
+  }
   const output = els.inspectorContent.querySelector('[data-token-output="' + property + '"]');
   if (output) output.textContent = property === "size" ? Math.round(token.size * 100) + "%" : Math.round(token.rotation) + "°";
   const element = els.tokensLayer.querySelector('[data-token-id="' + CSS.escape(token.id) + '"]');
@@ -2367,6 +2303,7 @@ function addBlueprintToScene(blueprintId) {
     id: makeId("token"),
     blueprintId,
     ownerId: blueprint.ownerId || PLAYER_ID,
+    visibleToPlayers: true,
     x: clamp(0.34 + (index % 4) * 0.1, 0.08, 0.92),
     y: clamp(0.35 + Math.floor(index / 4) * 0.12, 0.08, 0.92),
     size: blueprint.defaultSize || 0.08,
@@ -2689,7 +2626,7 @@ async function handleTokenSubmit(event) {
       state.library.tokenBlueprints.push(blueprint);
       const scene = currentScene();
       const token = {
-        id: makeId("token"), blueprintId: blueprint.id, ownerId: blueprint.ownerId,
+        id: makeId("token"), blueprintId: blueprint.id, ownerId: blueprint.ownerId, visibleToPlayers: true,
         x: 0.44, y: 0.5, size: blueprint.defaultSize, activeKey: images[0]?.key || "1", rotation: 0,
         visionRange: blueprint.ownerId === PLAYER_ID ? 0.32 : 0,
       };
@@ -2719,8 +2656,7 @@ async function handleMapUpload(event) {
    currentScene().mapAssetId = map.id;
    saveState();
    renderAll();
-    await analyzeMapLighting({ announce: false });
-    showToast("Mapa importado e analisado. Os tokens desta cena foram preservados.");
+    showToast("Mapa importado. Os tokens desta cena foram preservados.");
   } catch (error) {
     showToast(error.message || "Não foi possível importar o mapa.", true);
   }
@@ -2794,7 +2730,6 @@ function setMap(mapId) {
  scene.mapAssetId = mapId;
   saveState();
   renderAll();
- if (!currentMapAnalysis()) analyzeMapLighting({ announce: false });
   showToast("Mapa trocado; tokens e estados da cena continuam intactos.");
 }
 
@@ -2805,7 +2740,6 @@ function createScene() {
  const scene = {
    id: makeId("scene"), name, mapAssetId: null, camera: { x: 0, y: 0, zoom: 1 }, globalIllumination: false, visionMaskEnabled: true, darknessOpacity: 0.82,
     tokens: [], walls: [], lights: [], darknessZones: [], hotspots: [],
-   mapAnalysis: null,
   };
   state.scenes.push(scene);
   state.activeSceneId = scene.id;
@@ -2901,6 +2835,7 @@ function handleDelegatedClick(event) {
   if (actionName === "edit-blueprint-animation") openBlueprintAnimationDialog(id, action.dataset.animationId);
   if (actionName === "delete-light") deleteLight(id);
   if (actionName === "delete-darkness") deleteDarkness(id);
+  if (actionName === "delete-token") deleteToken(id);
   if (actionName === "select-state") setTokenState(id, action.dataset.stateKey);
   if (actionName === "open-sequence") {
     event.stopPropagation();
@@ -2910,10 +2845,17 @@ function handleDelegatedClick(event) {
 
 function handleKeydown(event) {
   const tagName = document.activeElement?.tagName;
+  const inputType = document.activeElement?.type;
+  const isTextEditing = tagName === "TEXTAREA" || tagName === "SELECT"
+    || (tagName === "INPUT" && ["text", "search", "url", "email", "password"].includes(inputType));
+  if (currentRole() === "gm" && !isTextEditing && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "x") {
+    event.preventDefault();
+    deleteSelection();
+    return;
+  }
   if (["INPUT", "TEXTAREA", "SELECT"].includes(tagName)) return;
   if (currentRole() === "gm" && (event.key === "Delete" || event.key === "Backspace")) {
-    if (state.ui.selectedLightId) deleteLight();
-    else if (state.ui.selectedDarknessId) deleteDarkness();
+    deleteSelection();
     return;
   }
   if (event.key === " ") {
@@ -3014,9 +2956,6 @@ function init() {
     renderLighting();
     saveState();
   });
- els.analyzeMapLighting.addEventListener("click", () => analyzeMapLighting());
- els.createSuggestedLights.addEventListener("click", createSuggestedLights);
- els.clearMapAnalysis.addEventListener("click", clearMapAnalysis);
   els.newLightColor.addEventListener("input", () => {
    if (currentRole() !== "gm") return;
    state.ui.newLightColor = normalizeHexColor(els.newLightColor.value);
