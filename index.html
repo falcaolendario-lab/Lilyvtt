@@ -9,7 +9,7 @@
       content="Beta de um tabletop web para RPG com cenas, tokens, permissões, luz e sequências narrativas."
     />
     <title>Tabletop RPG — Beta</title>
-    <link rel="stylesheet" href="styles.css?v=7" />
+    <link rel="stylesheet" href="styles.css?v=8" />
   </head>
   <body data-role="gm">
     <div class="app-shell">
@@ -90,8 +90,8 @@
             <button class="primary-button full-width" id="newToken"><span>＋</span> Novo token</button>
             <div class="asset-list" id="tokenList"></div>
 
-            <div class="section-label sequence-label"><span>SEQUÊNCIAS</span><span id="sequenceCount">0</span></div>
-            <div class="sequence-note">Crie um hotspot no canvas para adicionar imagens e frases em sequência.</div>
+            <div class="section-label sequence-label"><span>ANIMAÇÕES / SEQUÊNCIAS</span><span id="sequenceCount">0</span></div>
+            <div class="sequence-note">Crie uma sequência clicável: cada frame pode ter sua própria imagem e frase.</div>
             <div class="asset-list compact-list" id="sequenceList"></div>
           </section>
 
@@ -132,7 +132,7 @@
               <div><span class="tool-key">W</span><span>Barreira</span></div>
               <div><span class="tool-key">L</span><span>Luz</span></div>
               <div><span class="tool-key">D</span><span>Escuridão</span></div>
-              <div><span class="tool-key">H</span><span>Hotspot</span></div>
+              <div><span class="tool-key">H</span><span>Animação</span></div>
             </div>
             <div class="section-label"><span>COR DAS NOVAS LUZES</span></div>
             <label class="color-row light-creation-color" for="newLightColor">
@@ -169,7 +169,7 @@
               <span class="switch-ui"></span>
             </label>
             <label class="switch-row permission-row">
-              <span><strong>Interagir com hotspots</strong><small>Permite abrir cenas narrativas.</small></span>
+              <span><strong>Interagir com animações</strong><small>Permite abrir sequências clicáveis.</small></span>
               <input type="checkbox" data-permission="interactSequences" checked />
               <span class="switch-ui"></span>
             </label>
@@ -188,7 +188,7 @@
               <button class="tool-button" data-tool="wall" title="Desenhar barreira (W)"><span>╱</span><em>Barreira</em></button>
               <button class="tool-button" data-tool="light" title="Adicionar luz (L)"><span>◌</span><em>Luz</em></button>
               <button class="tool-button" data-tool="darkness" title="Criar área escura (D)"><span>◼</span><em>Escuridão</em></button>
-              <button class="tool-button" data-tool="hotspot" title="Adicionar hotspot (H)"><span>✦</span><em>Hotspot</em></button>
+              <button class="tool-button" data-tool="hotspot" title="Criar animação clicável (H)"><span>✦</span><em>Animação</em></button>
             </div>
             <div class="canvas-context">
               <span class="scene-chip" id="sceneChip">CENA INICIAL</span>
@@ -287,24 +287,31 @@
       </form>
     </dialog>
 
-    <dialog class="modal" id="sequenceDialog">
+    <dialog class="modal sequence-editor-modal" id="sequenceDialog">
       <form method="dialog" id="sequenceForm" class="modal-card">
         <div class="modal-header">
-          <div><div class="eyebrow">NARRATIVE HOTSPOT</div><h2>Nova sequência</h2></div>
+          <div><div class="eyebrow">CLICKABLE ANIMATION</div><h2>Nova animação</h2></div>
           <button class="icon-button modal-close" value="cancel" aria-label="Fechar">×</button>
         </div>
         <label class="field-label" for="sequenceName">Nome da sequência</label>
         <input class="text-input" id="sequenceName" type="text" maxlength="60" placeholder="Ex.: A porta começa a respirar" required />
         <label class="field-label" for="sequenceSpeaker">Nome exibido</label>
         <input class="text-input" id="sequenceSpeaker" type="text" maxlength="40" placeholder="Narrador" />
-        <label class="field-label" for="sequenceLines">Frases — uma por linha</label>
-        <textarea class="text-input text-area" id="sequenceLines" rows="4" placeholder="O corredor está vazio.\nEntão, alguma coisa pisca no escuro."></textarea>
-        <label class="field-label" for="sequenceImages">Imagens dos frames</label>
-        <input class="file-input" id="sequenceImages" type="file" accept="image/png,image/jpeg,image/webp" multiple />
-        <small class="form-help">A primeira imagem acompanha a primeira frase, a segunda acompanha a segunda e assim por diante.</small>
+        <div class="sequence-builder-intro">
+          <div class="eyebrow">COMO FUNCIONA</div>
+          <p>Um cartão = um momento. Coloque a imagem e a frase no mesmo cartão; o Player avança pelos cartões ao clicar em <strong>Próximo</strong>.</p>
+        </div>
+        <div class="sequence-builder-heading">
+          <div>
+            <label class="field-label">Frames da animação</label>
+            <small class="form-help">Até 12 frames. A imagem é opcional: você pode usar apenas texto.</small>
+          </div>
+          <button class="quiet-button add-frame-button" id="addSequenceFrame" type="button">＋ Adicionar frame</button>
+        </div>
+        <div class="sequence-frame-list" id="sequenceFrameList"></div>
         <div class="modal-actions">
           <button class="quiet-button" value="cancel">Cancelar</button>
-          <button class="primary-button" value="default">Criar hotspot</button>
+          <button class="primary-button" value="default">Criar animação</button>
         </div>
       </form>
     </dialog>
@@ -326,6 +333,6 @@
     </dialog>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="app.js?v=7" defer></script>
+    <script src="app.js?v=8" defer></script>
   </body>
 </html>
