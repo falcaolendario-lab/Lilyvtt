@@ -11,6 +11,7 @@
 const STORAGE_KEY = "tabletop-rpg-beta-state-v1";
 const STATE_SCHEMA_VERSION = 2;
 const PLAYER_ID = "player-1";
+const DEFAULT_LIGHT_COLOR = "#f4c783";
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
@@ -58,6 +59,7 @@ const els = {
   gmLightingPreview: $("#gmLightingPreview"),
   darknessOpacity: $("#darknessOpacity"),
   darknessOpacityValue: $("#darknessOpacityValue"),
+  newLightColor: $("#newLightColor"),
   selectionAvatar: $("#selectionAvatar"),
   selectionName: $("#selectionName"),
   selectionDetail: $("#selectionDetail"),
@@ -126,6 +128,15 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+function normalizeHexColor(value, fallback = DEFAULT_LIGHT_COLOR) {
+  const color = String(value || "").trim();
+  if (/^#[0-9a-f]{6}$/i.test(color)) return color.toLowerCase();
+  if (/^#[0-9a-f]{3}$/i.test(color)) {
+    return `#${color.slice(1).split("").map((part) => part + part).join("").toLowerCase()}`;
+  }
+  return fallback;
+}
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -178,6 +189,7 @@ function initialState() {
       selectedLightId: null,
       selectedDarknessId: null,
       gmLightingPreview: true,
+      newLightColor: DEFAULT_LIGHT_COLOR,
       panels: { leftOpen: false, rightOpen: false },
     },
   };
@@ -276,7 +288,7 @@ function normalizeLights(lights) {
       radius: clamp(Number(light.radius) || 0.2, 0.02, 2),
       falloff: clamp(Number(light.falloff) || 0.72, 0.2, 0.95),
       intensity: clamp(Number(light.intensity) || 1, 0.05, 1.5),
-      color: String(light.color || "#f4c783"),
+      color: normalizeHexColor(light.color),
       providesVision: light.providesVision !== false,
     });
     return normalizedLights;
@@ -329,6 +341,8 @@ function normalizeState(value) {
       panels: { ...base.ui.panels, ...(loaded.ui?.panels || {}) },
     },
   };
+
+  normalized.ui.newLightColor = normalizeHexColor(normalized.ui.newLightColor);
 
   normalized.scenes = normalized.scenes.map((scene) => ({
     ...scene,
@@ -535,6 +549,8 @@ function renderSidebar() {
   els.visionMask.checked = currentScene().visionMaskEnabled !== false;
   const darknessOpacity = Math.round((currentScene().darknessOpacity ?? 0.82) * 100);
   els.gmLightingPreview.checked = state.ui.gmLightingPreview !== false;
+  els.newLightColor.value = normalizeHexColor(state.ui.newLightColor);
+  updateLightPresetStyles();
   els.darknessOpacity.value = String(darknessOpacity);
   els.darknessOpacityValue.textContent = `${darknessOpacity}%`;
   $$('[data-permission]').forEach((input) => {
@@ -593,7 +609,7 @@ function renderCanvasObjects() {
 
   els.lightsLayer.innerHTML = currentRole() === "gm"
     ? scene.lights.map((light) => `
-      <button class="light-marker ${state.ui.selectedLightId === light.id ? "selected" : ""}" data-light-id="${escapeHtml(light.id)}" style="left:${light.x * 100}%;top:${light.y * 100}%;--light-color:${escapeHtml(light.color || "#f4c783")}" title="Luz · arraste para mover" aria-label="Luz, arraste para mover"><span>✦</span></button>`).join("")
+      <button class="light-marker ${state.ui.selectedLightId === light.id ? "selected" : ""}" data-light-id="${escapeHtml(light.id)}" style="left:${light.x * 100}%;top:${light.y * 100}%;--light-color:${escapeHtml(normalizeHexColor(light.color))}" title="Luz ${escapeHtml(normalizeHexColor(light.color))} · arraste para mover" aria-label="Luz ${escapeHtml(normalizeHexColor(light.color))}, arraste para mover"><span>✦</span></button>`).join("")
     : "";
 
   els.hotspotsLayer.innerHTML = scene.hotspots.filter((hotspot) => hotspot.visible !== false).map((hotspot) => {
@@ -821,7 +837,7 @@ function renderLighting() {
     range: light.radius,
     falloff: Number(light.falloff) || 0.72,
     intensity: Number(light.intensity) || 1,
-    color: light.color || "#f4c783",
+    color: normalizeHexColor(light.color),
     kind: "light",
   }));
 
@@ -1090,6 +1106,15 @@ function updateLightSelectionStyles() {
 function updateDarknessSelectionStyles() {
   $$(".darkness-zone").forEach((element) => {
     element.classList.toggle("selected", element.dataset.darknessId === state.ui.selectedDarknessId);
+  });
+}
+
+function updateLightPresetStyles() {
+  const selectedColor = normalizeHexColor(state.ui.newLightColor);
+  $$('[data-light-preset]').forEach((button) => {
+    const isSelected = normalizeHexColor(button.dataset.lightPreset) === selectedColor;
+    button.classList.toggle("active", isSelected);
+    button.setAttribute("aria-pressed", String(isSelected));
   });
 }
 
@@ -1539,7 +1564,9 @@ function handleStageClick(event) {
     return;
   }
   if (tool === "light") {
-    const light = { id: makeId("light"), x: point.x, y: point.y, radius: 0.2, falloff: 0.72, intensity: 1, color: "#f4c783", providesVision: true };
+    const color = normalizeHexColor(els.newLightColor?.value || state.ui.newLightColor);
+    state.ui.newLightColor = color;
+    const light = { id: makeId("light"), x: point.x, y: point.y, radius: 0.2, falloff: 0.72, intensity: 1, color, providesVision: true };
     currentScene().lights.push(light);
     state.ui.selectedTokenId = null;
     state.ui.selectedLightId = light.id;
@@ -1878,6 +1905,16 @@ function showToast(message, isError = false) {
 }
 
 function handleDelegatedClick(event) {
+  const lightPreset = event.target.closest("[data-light-preset]");
+  if (lightPreset) {
+    event.preventDefault();
+    if (currentRole() !== "gm") return;
+    state.ui.newLightColor = normalizeHexColor(lightPreset.dataset.lightPreset);
+    els.newLightColor.value = state.ui.newLightColor;
+    updateLightPresetStyles();
+    saveState();
+    return;
+  }
   const removeFrame = event.target.closest("[data-remove-frame]");
   if (removeFrame) {
     event.preventDefault();
@@ -2005,6 +2042,12 @@ function init() {
     currentScene().darknessOpacity = Number(els.darknessOpacity.value) / 100;
     els.darknessOpacityValue.textContent = `${els.darknessOpacity.value}%`;
     renderLighting();
+    saveState();
+  });
+  els.newLightColor.addEventListener("input", () => {
+    if (currentRole() !== "gm") return;
+    state.ui.newLightColor = normalizeHexColor(els.newLightColor.value);
+    updateLightPresetStyles();
     saveState();
   });
   els.inspectorContent.addEventListener("input", handleLightControl);
