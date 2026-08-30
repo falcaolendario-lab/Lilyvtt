@@ -9,9 +9,11 @@
  */
 
 const STORAGE_KEY = "tabletop-rpg-beta-state-v1";
-const STATE_SCHEMA_VERSION = 2;
+const STATE_SCHEMA_VERSION = 3;
 const PLAYER_ID = "player-1";
 const DEFAULT_LIGHT_COLOR = "#f4c783";
+const MAX_TOKEN_ANIMATION_FRAMES = 12;
+const TOKEN_ANIMATION_FRAME_MS = 560;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
@@ -76,6 +78,7 @@ const els = {
   framePreview: $("#framePreview"),
   saveToken: $("#saveToken"),
   sequenceDialog: $("#sequenceDialog"),
+  sequenceDialogTitle: $("#sequenceDialogTitle"),
   sequenceForm: $("#sequenceForm"),
   sequenceName: $("#sequenceName"),
   sequenceSpeaker: $("#sequenceSpeaker"),
@@ -97,7 +100,7 @@ let state = loadState();
 let editingBlueprintId = null;
 let pendingTokenFiles = [];
 let pendingSequenceFrames = [];
-let sequencePlacement = null;
+let editingTokenAnimation = null;
 let sequencePlayback = null;
 let wallDraftPoint = null;
 let activeDrag = null;
@@ -111,6 +114,7 @@ let cameraSaveTimer = null;
 let toastTimer = null;
 let removedTokenImageKeys = new Set();
 let framePreviewUrls = [];
+const activeTokenAnimations = new Map();
 
 if (new URLSearchParams(window.location.search).get("mode") === "player") {
   state.ui.role = "player";
@@ -318,6 +322,32 @@ function normalizeDarknessZones(zones) {
   }, []);
 }
 
+function normalizeTokenAnimations(animations) {
+  const seenIds = new Set();
+  return (Array.isArray(animations) ? animations : []).reduce((normalizedAnimations, animation) => {
+    if (!animation || typeof animation !== "object") return normalizedAnimations;
+    let id = String(animation.id || makeId("animation"));
+    if (seenIds.has(id)) id = makeId("animation");
+    seenIds.add(id);
+    const frames = (Array.isArray(animation.frames) ? animation.frames : [])
+      .slice(0, MAX_TOKEN_ANIMATION_FRAMES)
+      .map((frame) => ({
+        image: frame?.image ? String(frame.image) : null,
+        text: String(frame?.text || "").trim().slice(0, 500),
+      }))
+      .filter((frame) => frame.image || frame.text);
+    if (!frames.length) return normalizedAnimations;
+    normalizedAnimations.push({
+      ...animation,
+      id,
+      name: String(animation.name || "Animação do token").trim() || "Animação do token",
+      speaker: String(animation.speaker || "Narrador").trim() || "Narrador",
+      frames,
+    });
+    return normalizedAnimations;
+  }, []);
+}
+
 function normalizeState(value) {
   const base = initialState();
   const loaded = value && typeof value === "object" ? value : {};
@@ -331,7 +361,12 @@ function normalizeState(value) {
       ...base.library,
       ...(loaded.library || {}),
       maps: Array.isArray(loaded.library?.maps) ? loaded.library.maps : base.library.maps,
-      tokenBlueprints: Array.isArray(loaded.library?.tokenBlueprints) ? loaded.library.tokenBlueprints : base.library.tokenBlueprints,
+      tokenBlueprints: Array.isArray(loaded.library?.tokenBlueprints)
+        ? loaded.library.tokenBlueprints.map((blueprint) => ({
+          ...blueprint,
+          animations: normalizeTokenAnimations(blueprint?.animations),
+        }))
+        : base.library.tokenBlueprints,
       sequences: Array.isArray(loaded.library?.sequences) ? loaded.library.sequences : base.library.sequences,
     },
     scenes: Array.isArray(loaded.scenes) && loaded.scenes.length ? loaded.scenes : base.scenes,
@@ -432,6 +467,100 @@ function getTokenImage(token) {
   return blueprint?.images?.find((image) => image.key === String(token.activeKey)) || blueprint?.images?.[0] || null;
 }
 
+function getTokenAnimations(token) {
+  return getBlueprint(token?.blueprintId)?.animations || [];
+}
+
+function getTokenAnimation(token, animationId = null) {
+  const animations = getTokenAnimations(token);
+  return animations.find((animation) => animation.id === animationId) || animations[0] || null;
+}
+
+function countTokenAnimations() {
+  return state.library.tokenBlueprints.reduce((total, blueprint) => total + (blueprint.animations?.length || 0), 0);
+}
+
+function canPlayTokenAnimation(token) {
+  if (!token) return false;
+  if (currentRole() === "gm") return true;
+  return Boolean(state.permissions.interactSequences && token.ownerId === currentMemberId());
+}
+
+function getActiveTokenAnimationFrame(token) {
+  const playback = activeTokenAnimations.get(token?.id);
+  if (!playback) return null;
+  const animation = getTokenAnimation(token, playback.animationId);
+  if (!animation?.frames?.length) return null;
+  return animation.frames[clamp(playback.frameIndex, 0, animation.frames.length - 1)] || null;
+}
+
+function stopTokenAnimation(tokenId, { restore = true, render = true, announce = false } = {}) {
+  const playback = activeTokenAnimations.get(tokenId);
+  if (!playback) return;
+  window.clearTimeout(playback.timer);
+  const token = getToken(tokenId);
+  let restored = false;
+  if (restore && token && playback.returnStateKey && token.activeKey !== playback.returnStateKey) {
+    token.activeKey = playback.returnStateKey;
+    restored = true;
+  }
+  activeTokenAnimations.delete(tokenId);
+  if (restored) saveState();
+  if (render) {
+    renderCanvasObjects();
+    renderFooter();
+    renderInspector();
+  }
+  if (announce) showToast("Animação concluída; estado anterior restaurado.");
+}
+
+function scheduleTokenAnimation(tokenId) {
+  const playback = activeTokenAnimations.get(tokenId);
+  if (!playback) return;
+  playback.timer = window.setTimeout(() => advanceTokenAnimation(tokenId), TOKEN_ANIMATION_FRAME_MS);
+}
+
+function advanceTokenAnimation(tokenId) {
+  const playback = activeTokenAnimations.get(tokenId);
+  const token = getToken(tokenId);
+  const animation = getTokenAnimation(token, playback?.animationId);
+  if (!playback || !token || !animation?.frames?.length || playback.frameIndex >= animation.frames.length - 1) {
+    stopTokenAnimation(tokenId, { announce: Boolean(playback) });
+    return;
+  }
+  playback.frameIndex += 1;
+  renderCanvasObjects();
+  renderFooter();
+  renderInspector();
+  scheduleTokenAnimation(tokenId);
+}
+
+function playTokenAnimation(tokenId, animationId = null) {
+  const token = getToken(tokenId);
+  if (!token) return;
+  if (!canPlayTokenAnimation(token)) {
+    showToast("O Mestre não liberou a animação deste token.", true);
+    return;
+  }
+  const animation = getTokenAnimation(token, animationId);
+  if (!animation?.frames?.length) {
+    showToast("Este token ainda não tem uma animação salva.", true);
+    return;
+  }
+  stopTokenAnimation(tokenId, { render: false, announce: false });
+  activeTokenAnimations.set(tokenId, {
+    animationId: animation.id,
+    frameIndex: 0,
+    returnStateKey: String(token.activeKey || getBlueprint(token.blueprintId)?.images?.[0]?.key || "1"),
+    timer: null,
+  });
+  renderCanvasObjects();
+  renderFooter();
+  renderInspector();
+  showToast(`${animation.name} ativada · volta ao estado anterior no fim.`);
+  scheduleTokenAnimation(tokenId);
+}
+
 function canMoveToken(token) {
   if (currentRole() === "gm") return true;
   return Boolean(state.permissions.moveOwnToken && token.ownerId === currentMemberId());
@@ -502,11 +631,11 @@ function renderPanels() {
 function renderSidebar() {
   const maps = state.library.maps;
   const blueprints = state.library.tokenBlueprints;
-  const sequences = state.library.sequences;
-  els.assetCount.textContent = maps.length + blueprints.length + sequences.length;
+  const tokenAnimations = blueprints.flatMap((blueprint) => (blueprint.animations || []).map((animation) => ({ blueprint, animation })));
+  els.assetCount.textContent = maps.length + blueprints.length + tokenAnimations.length;
   els.mapCount.textContent = maps.length;
   els.tokenCount.textContent = blueprints.length;
-  els.sequenceCount.textContent = sequences.length;
+  els.sequenceCount.textContent = tokenAnimations.length;
 
   els.mapList.innerHTML = maps.length
     ? maps.map((map) => `
@@ -536,13 +665,13 @@ function renderSidebar() {
     }).join("")
     : '<div class="empty-list">Crie um token com imagens, estados e teclas reutilizáveis.</div>';
 
-  els.sequenceList.innerHTML = sequences.length
-    ? sequences.map((sequence) => `
-      <button class="asset-row" data-action="open-sequence" data-id="${escapeHtml(sequence.id)}" title="Testar sequência">
+  els.sequenceList.innerHTML = tokenAnimations.length
+    ? tokenAnimations.map(({ blueprint, animation }) => `
+      <button class="asset-row" data-action="edit-blueprint-animation" data-id="${escapeHtml(blueprint.id)}" data-animation-id="${escapeHtml(animation.id)}" title="Editar animação do token">
         <span class="asset-thumb" style="color:var(--violet);border-color:rgba(185,169,255,.28)">✦</span>
-        <span class="asset-row-copy"><strong>${escapeHtml(sequence.name)}</strong><small>${sequence.frames?.length || 0} frames · visualizar</small></span>
+        <span class="asset-row-copy"><strong>${escapeHtml(blueprint.name)} · ${escapeHtml(animation.name)}</strong><small>${animation.frames?.length || 0}/12 frames · editar</small></span>
       </button>`).join("")
-    : '<div class="empty-list">Nenhuma sequência criada ainda.</div>';
+    : '<div class="empty-list">Nenhuma animação salva. Selecione um token no mapa para criar a primeira.</div>';
 
   els.sceneName.value = currentScene().name;
   els.globalIllumination.checked = Boolean(currentScene().globalIllumination);
@@ -576,7 +705,7 @@ function renderToolbar() {
       wall: wallDraftPoint ? "Escolha o segundo ponto da barreira" : "Clique em dois pontos para desenhar uma barreira",
       light: "Clique no mapa para adicionar uma luz",
       darkness: "Arraste no mapa para criar uma área escura · clique para uma área padrão",
-      hotspot: "Clique no mapa para posicionar uma animação clicável",
+      animation: "Clique em um token para ativar sua animação",
     };
     els.toolStatus.textContent = messages[tool] || messages.select;
   }
@@ -612,22 +741,26 @@ function renderCanvasObjects() {
       <button class="light-marker ${state.ui.selectedLightId === light.id ? "selected" : ""}" data-light-id="${escapeHtml(light.id)}" style="left:${light.x * 100}%;top:${light.y * 100}%;--light-color:${escapeHtml(normalizeHexColor(light.color))}" title="Luz ${escapeHtml(normalizeHexColor(light.color))} · arraste para mover" aria-label="Luz ${escapeHtml(normalizeHexColor(light.color))}, arraste para mover"><span>✦</span></button>`).join("")
     : "";
 
-  els.hotspotsLayer.innerHTML = scene.hotspots.filter((hotspot) => hotspot.visible !== false).map((hotspot) => {
-    const sequence = getSequence(hotspot.sequenceId);
-    return `<button class="hotspot" style="left:${hotspot.x * 100}%;top:${hotspot.y * 100}%" data-action="open-sequence" data-id="${escapeHtml(hotspot.sequenceId)}" title="${escapeHtml(sequence?.name || "Interagir")}" aria-label="Abrir sequência ${escapeHtml(sequence?.name || "narrativa")}">✦</button>`;
-  }).join("");
+  // Animações novas pertencem aos tokens. O layer antigo fica vazio para não
+  // deixar hotspots narrativos soltos no mapa depois da migração do beta.
+  els.hotspotsLayer.innerHTML = "";
 
   els.tokensLayer.innerHTML = scene.tokens.map((token) => {
     const blueprint = getBlueprint(token.blueprintId) || { name: "Token", images: [] };
-    const image = getTokenImage(token);
+    const animationFrame = getActiveTokenAnimationFrame(token);
+    const image = animationFrame?.image ? { src: animationFrame.image } : getTokenImage(token);
     const isSelected = state.ui.selectedTokenId === token.id;
     const isOwned = token.ownerId === currentMemberId();
+    const playback = activeTokenAnimations.get(token.id);
+    const animation = getTokenAnimation(token, playback?.animationId);
     const contents = image
       ? `<img src="${escapeHtml(image.src)}" alt="${escapeHtml(blueprint.name)}" draggable="false" />`
       : `<span class="token-fallback">${escapeHtml(blueprint.name.slice(0, 1).toUpperCase())}</span>`;
     return `
-      <div class="token ${isSelected ? "selected" : ""} ${isOwned ? "player-owned" : ""}" data-token-id="${escapeHtml(token.id)}" style="left:${token.x * 100}%;top:${token.y * 100}%;--token-size:${(token.size || blueprint.defaultSize || 0.08) * 100}%;transform:translate(-50%,-50%) rotate(${Number(token.rotation) || 0}deg)" tabindex="0" role="button" aria-label="Token ${escapeHtml(blueprint.name)}">
+      <div class="token ${isSelected ? "selected" : ""} ${isOwned ? "player-owned" : ""} ${playback ? "token-animation-playing" : ""}" data-token-id="${escapeHtml(token.id)}" style="left:${token.x * 100}%;top:${token.y * 100}%;--token-size:${(token.size || blueprint.defaultSize || 0.08) * 100}%;transform:translate(-50%,-50%) rotate(${Number(token.rotation) || 0}deg)" tabindex="0" role="button" aria-label="Token ${escapeHtml(blueprint.name)}">
         ${contents}
+        ${animationFrame?.text ? `<span class="token-animation-caption">${escapeHtml(animationFrame.text)}</span>` : ""}
+        ${playback && animation ? `<span class="token-animation-badge">▶ ${playback.frameIndex + 1}/${animation.frames.length}</span>` : ""}
         <span class="token-tag">${escapeHtml(blueprint.name)}</span>
       </div>`;
   }).join("");
@@ -672,13 +805,24 @@ function renderFooter() {
   }
 
   const blueprint = getBlueprint(token.blueprintId) || { name: "Token", images: [] };
-  const image = getTokenImage(token);
+  const animationFrame = getActiveTokenAnimationFrame(token);
+  const image = animationFrame?.image ? { src: animationFrame.image } : getTokenImage(token);
   els.selectionAvatar.innerHTML = image ? `<img src="${escapeHtml(image.src)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:7px" />` : escapeHtml(blueprint.name.slice(0, 1).toUpperCase());
   els.selectionName.textContent = blueprint.name;
   const owner = state.members.find((member) => member.id === token.ownerId)?.name || "Mestre";
-  els.selectionDetail.textContent = `${owner} · estado ${token.activeKey || "1"} · ${canMoveToken(token) ? "pode mover" : "somente visualização"}`;
+  const playback = activeTokenAnimations.get(token.id);
+  const animation = getTokenAnimation(token, playback?.animationId);
+  const animationStatus = playback && animation ? ` · animando ${playback.frameIndex + 1}/${animation.frames.length}` : "";
+  els.selectionDetail.textContent = `${owner} · estado ${token.activeKey || "1"}${animationStatus} · ${canMoveToken(token) ? "pode mover" : "somente visualização"}`;
   const images = blueprint.images || [];
-  els.hotkeyStrip.innerHTML = `<span class="eyebrow">ESTADOS</span>${images.length ? images.map((item) => `<button class="hotkey available ${String(token.activeKey) === String(item.key) ? "current" : ""}" data-action="select-state" data-id="${escapeHtml(token.id)}" data-state-key="${escapeHtml(item.key)}" title="${escapeHtml(item.label || `Estado ${item.key}`)}">${escapeHtml(item.key)}</button>`).join("") : '<span class="hotkey-placeholder">Adicione imagens ao token para habilitar 1–9</span>'}`;
+  const animations = getTokenAnimations(token);
+  const stateButtons = images.length
+    ? images.map((item) => `<button class="hotkey available ${String(token.activeKey) === String(item.key) ? "current" : ""}" data-action="select-state" data-id="${escapeHtml(token.id)}" data-state-key="${escapeHtml(item.key)}" title="${escapeHtml(item.label || `Estado ${item.key}`)}">${escapeHtml(item.key)}</button>`).join("")
+    : '<span class="hotkey-placeholder">Adicione imagens ao token para habilitar 1–9</span>';
+  const animationButtons = animations.length && canPlayTokenAnimation(token)
+    ? `<span class="eyebrow">ANIMAÇÃO</span>${animations.map((item) => `<button class="hotkey available ${playback?.animationId === item.id ? "current" : ""}" data-action="play-token-animation" data-id="${escapeHtml(token.id)}" data-animation-id="${escapeHtml(item.id)}" title="Ativar ${escapeHtml(item.name)}">▶</button>`).join("")}`
+    : "";
+  els.hotkeyStrip.innerHTML = `<span class="eyebrow">ESTADOS</span>${stateButtons}${animationButtons}`;
 }
 
 function renderInspector() {
@@ -733,6 +877,19 @@ function renderInspector() {
   if (token) {
     const blueprint = getBlueprint(token.blueprintId) || { name: "Token", images: [] };
     const images = blueprint.images || [];
+    const animations = getTokenAnimations(token);
+    const playback = activeTokenAnimations.get(token.id);
+    const activeAnimation = getTokenAnimation(token, playback?.animationId);
+    const animationRows = animations.length
+      ? animations.map((animation) => `
+          <div class="animation-row">
+            <div class="animation-row-copy"><strong>${escapeHtml(animation.name)}</strong><small>${animation.frames.length}/12 frames${playback?.animationId === animation.id ? ` · <span class="animation-active-label">em andamento</span>` : ""}</small></div>
+            <div class="animation-row-actions">
+              <button class="quiet-button animation-play-button" data-action="play-token-animation" data-id="${escapeHtml(token.id)}" data-animation-id="${escapeHtml(animation.id)}" title="Ativar animação">▶ Ativar</button>
+              <button class="icon-button animation-edit-button" data-action="edit-token-animation" data-id="${escapeHtml(token.id)}" data-animation-id="${escapeHtml(animation.id)}" title="Editar animação" aria-label="Editar animação">···</button>
+            </div>
+          </div>`).join("")
+      : '<div class="empty-list">Nenhuma animação neste token ainda.</div>';
     els.inspectorTitle.textContent = blueprint.name;
     els.inspectorContent.innerHTML = `
       <div class="inspector-card">
@@ -754,6 +911,15 @@ function renderInspector() {
           </button>`).join("") : '<div class="empty-list" style="grid-column:1/-1">Este token ainda usa o fallback de texto. Edite-o para adicionar imagens.</div>'}</div>
         <button class="quiet-button full-width" data-action="edit-token" data-id="${escapeHtml(token.blueprintId)}" style="margin-top:10px">Editar token na biblioteca</button>
       </div>`;
+    els.inspectorContent.innerHTML += `
+      <div class="inspector-card">
+        <div class="eyebrow">TEMPORARY ANIMATION</div>
+        <div class="inspector-title">Ativação do token</div>
+        <div class="inspector-meta">A imagem e a frase passam neste token por até 12 frames. No fim, o estado ${escapeHtml(token.activeKey || "1")} é restaurado automaticamente.</div>
+        <div class="animation-list">${animationRows}</div>
+        <button class="primary-button full-width" data-action="edit-token-animation" data-id="${escapeHtml(token.id)}" style="margin-top:10px">＋ ${animations.length ? "Criar outra animação" : "Criar animação"}</button>
+        ${playback && activeAnimation ? `<div class="inspector-meta" style="color:var(--violet)">▶ ${escapeHtml(activeAnimation.name)} · frame ${playback.frameIndex + 1}/${activeAnimation.frames.length}</div>` : ""}
+      </div>`;
     return;
   }
 
@@ -764,18 +930,18 @@ function renderInspector() {
       <div class="inspector-card">
         <div class="eyebrow">PERSISTENT BANK</div>
         <div class="inspector-title">Biblioteca do Mestre</div>
-        <div class="inspector-meta">Assets ficam fora da cena. Trocar o mapa não apaga tokens, imagens ou sequências cadastradas.</div>
+        <div class="inspector-meta">Assets ficam fora da cena. Trocar o mapa não apaga tokens, imagens ou animações cadastradas.</div>
         <div class="permission-summary">
           <div><span>Mapas</span><b>${state.library.maps.length}</b></div>
           <div><span>Tokens salvos</span><b>${state.library.tokenBlueprints.length}</b></div>
-          <div><span>Sequências</span><b>${state.library.sequences.length}</b></div>
+          <div><span>Animações de token</span><b>${countTokenAnimations()}</b></div>
           <div><span>Tokens nesta cena</span><b>${scene.tokens.length}</b></div>
         </div>
       </div>
       <div class="inspector-card">
         <div class="eyebrow">SCENE STATUS</div>
         <div class="inspector-title">${escapeHtml(scene.name)}</div>
-        <div class="inspector-meta">${scene.walls.length} barreiras · ${scene.lights.length} luzes · ${scene.darknessZones.length} áreas escuras · ${scene.hotspots.length} hotspots</div>
+        <div class="inspector-meta">${scene.walls.length} barreiras · ${scene.lights.length} luzes · ${scene.darknessZones.length} áreas escuras · animações ficam nos tokens</div>
       </div>`
     : `
       <div class="inspector-card">
@@ -1122,6 +1288,14 @@ function bindTokenInteractions() {
   $$(".token").forEach((element) => {
     element.addEventListener("click", (event) => {
       event.stopPropagation();
+      if (currentRole() === "gm" && state.ui.activeTool === "animation") {
+        const token = getToken(element.dataset.tokenId);
+        if (!token) return;
+        const animation = getTokenAnimation(token);
+        if (animation) playTokenAnimation(token.id, animation.id);
+        else openTokenAnimationDialog(token.id);
+        return;
+      }
       selectToken(element.dataset.tokenId);
     });
     element.addEventListener("pointerdown", (event) => {
@@ -1594,9 +1768,8 @@ function handleStageClick(event) {
     showToast("Área escura adicionada. Arraste para mover ou use Delete para excluir.");
     return;
   }
-  if (tool === "hotspot") {
-    sequencePlacement = point;
-    openSequenceDialog();
+  if (tool === "animation") {
+    showToast("Clique diretamente em um token para ativar sua animação.", true);
     return;
   }
   clearSelection();
@@ -1630,6 +1803,10 @@ function setTokenState(tokenId, stateKey) {
   const token = getToken(tokenId);
   if (!token || !canChangeTokenImage(token)) {
     showToast("O Mestre não liberou a troca de estados para este token.", true);
+    return;
+  }
+  if (activeTokenAnimations.has(token.id)) {
+    showToast("Aguarde a animação terminar para trocar o estado do token.", true);
     return;
   }
   const blueprint = getBlueprint(token.blueprintId);
@@ -1682,8 +1859,6 @@ function renderFramePreview() {
       <button class="remove-state-button" type="button" data-remove-frame="${escapeHtml(frame.id)}" title="Remover estado" aria-label="Remover estado ${index + 1}">×</button>
     </div>`).join("");
 }
-
-const MAX_SEQUENCE_FRAMES = 12;
 
 function createSequenceFrameDraft() {
   return {
@@ -1743,8 +1918,8 @@ function renderSequenceFrameEditor() {
 
 function addSequenceFrame() {
   syncSequenceFrameTexts();
-  if (pendingSequenceFrames.length >= MAX_SEQUENCE_FRAMES) {
-    showToast(`Uma animação pode ter no máximo ${MAX_SEQUENCE_FRAMES} frames.`, true);
+  if (pendingSequenceFrames.length >= MAX_TOKEN_ANIMATION_FRAMES) {
+    showToast(`Uma animação pode ter no máximo ${MAX_TOKEN_ANIMATION_FRAMES} frames.`, true);
     return;
   }
   pendingSequenceFrames.push(createSequenceFrameDraft());
@@ -1797,10 +1972,30 @@ function handleSequenceFrameInput(event) {
   if (counter) counter.textContent = `${textarea.value.length}/500`;
 }
 
-function openSequenceDialog() {
-  els.sequenceName.value = "";
-  els.sequenceSpeaker.value = "Narrador";
-  pendingSequenceFrames = [createSequenceFrameDraft()];
+function openTokenAnimationDialog(tokenId, animationId = null) {
+  const token = getToken(tokenId);
+  if (!token) return;
+  openBlueprintAnimationDialog(token.blueprintId, animationId, token.id);
+}
+
+function openBlueprintAnimationDialog(blueprintId, animationId = null, tokenId = null) {
+  if (currentRole() !== "gm") return;
+  const blueprint = getBlueprint(blueprintId);
+  if (!blueprint) return;
+  const animation = (blueprint.animations || []).find((item) => item.id === animationId) || null;
+  editingTokenAnimation = { blueprintId: blueprint.id, animationId: animation?.id || null, tokenId };
+  els.sequenceDialogTitle.textContent = animation ? "Editar animação do token" : "Nova animação do token";
+  els.sequenceName.value = animation?.name || "";
+  els.sequenceSpeaker.value = animation?.speaker || "Narrador";
+  pendingSequenceFrames = animation?.frames?.length
+    ? animation.frames.slice(0, MAX_TOKEN_ANIMATION_FRAMES).map((frame, index) => ({
+      id: makeId("sequence-frame"),
+      imageFile: null,
+      imageSrc: frame.image || null,
+      imageName: frame.image ? `Imagem salva ${index + 1}` : "",
+      text: frame.text || "",
+    }))
+    : [createSequenceFrameDraft()];
   renderSequenceFrameEditor();
   els.sequenceDialog.showModal();
 }
@@ -1899,7 +2094,7 @@ async function handleTokenSubmit(event) {
         token.activeKey = previousToNextKey.get(String(token.activeKey)) || images[0]?.key || "1";
       }));
     } else {
-      const blueprint = { id: makeId("blueprint"), name, ownerId: els.tokenOwner.value, images, defaultSize: 0.08 };
+      const blueprint = { id: makeId("blueprint"), name, ownerId: els.tokenOwner.value, images, animations: [], defaultSize: 0.08 };
       state.library.tokenBlueprints.push(blueprint);
       const scene = currentScene();
       const token = {
@@ -1941,6 +2136,7 @@ async function handleMapUpload(event) {
 async function handleSequenceSubmit(event) {
   if (event.submitter?.value === "cancel") return;
   event.preventDefault();
+  if (currentRole() !== "gm" || !editingTokenAnimation) return;
   syncSequenceFrameTexts();
   const name = els.sequenceName.value.trim();
   if (!name) {
@@ -1950,7 +2146,7 @@ async function handleSequenceSubmit(event) {
   const frames = pendingSequenceFrames
     .map((frame) => ({ ...frame, text: String(frame.text || "").trim() }))
     .filter((frame) => frame.imageSrc || frame.imageFile || frame.text)
-    .slice(0, MAX_SEQUENCE_FRAMES);
+    .slice(0, MAX_TOKEN_ANIMATION_FRAMES);
   if (!frames.length) {
     showToast("Adicione uma imagem ou frase em pelo menos um frame.", true);
     return;
@@ -1960,18 +2156,31 @@ async function handleSequenceSubmit(event) {
       image: frame.imageSrc || (frame.imageFile ? await fileToDataUrl(frame.imageFile) : null),
       text: frame.text,
     })));
-    const sequence = { id: makeId("sequence"), name, speaker: els.sequenceSpeaker.value.trim() || "Narrador", frames: preparedFrames };
-    state.library.sequences.push(sequence);
-    currentScene().hotspots.push({ id: makeId("hotspot"), sequenceId: sequence.id, x: sequencePlacement?.x || 0.5, y: sequencePlacement?.y || 0.5, visible: true });
-    sequencePlacement = null;
+    const blueprint = getBlueprint(editingTokenAnimation.blueprintId);
+    if (!blueprint) return;
+    if (!Array.isArray(blueprint.animations)) blueprint.animations = [];
+    const isEditing = Boolean(editingTokenAnimation.animationId);
+    const savedAnimation = {
+      id: editingTokenAnimation.animationId || makeId("animation"),
+      name,
+      speaker: els.sequenceSpeaker.value.trim() || "Narrador",
+      frames: preparedFrames,
+    };
+    const animationIndex = blueprint.animations.findIndex((animation) => animation.id === savedAnimation.id);
+    if (animationIndex >= 0) blueprint.animations[animationIndex] = savedAnimation;
+    else blueprint.animations.push(savedAnimation);
+    currentScene().tokens
+      .filter((token) => token.blueprintId === blueprint.id && activeTokenAnimations.has(token.id))
+      .forEach((token) => stopTokenAnimation(token.id, { render: false, announce: false }));
     state.ui.activeTool = "select";
     pendingSequenceFrames = [];
+    editingTokenAnimation = null;
     saveState();
     els.sequenceDialog.close();
     renderAll();
-    showToast("Animação criada. Clique no símbolo ✦ do mapa para testar.");
+    showToast(isEditing ? "Animação atualizada e salva no token." : "Animação salva no token. Use ▶ Ativar para testar.");
   } catch (error) {
-    showToast(error.message || "Não foi possível criar a sequência.", true);
+    showToast(error.message || "Não foi possível salvar a animação.", true);
   }
 }
 
@@ -2072,6 +2281,9 @@ function handleDelegatedClick(event) {
   if (actionName === "set-map") setMap(id);
   if (actionName === "add-token") addBlueprintToScene(id);
   if (actionName === "edit-token") openTokenDialog(id);
+  if (actionName === "play-token-animation") playTokenAnimation(id, action.dataset.animationId);
+  if (actionName === "edit-token-animation") openTokenAnimationDialog(id, action.dataset.animationId);
+  if (actionName === "edit-blueprint-animation") openBlueprintAnimationDialog(id, action.dataset.animationId);
   if (actionName === "delete-light") deleteLight(id);
   if (actionName === "delete-darkness") deleteDarkness(id);
   if (actionName === "select-state") setTokenState(id, action.dataset.stateKey);
@@ -2111,7 +2323,7 @@ function handleKeydown(event) {
   if (currentRole() === "gm" && event.key.toLowerCase() === "w") setTool("wall");
   if (currentRole() === "gm" && event.key.toLowerCase() === "l") setTool("light");
   if (currentRole() === "gm" && event.key.toLowerCase() === "d") setTool("darkness");
-  if (currentRole() === "gm" && event.key.toLowerCase() === "h") setTool("hotspot");
+  if (currentRole() === "gm" && event.key.toLowerCase() === "h") setTool("animation");
   if (/^[1-9]$/.test(event.key) && state.ui.selectedTokenId) setTokenState(state.ui.selectedTokenId, event.key);
 }
 
@@ -2211,7 +2423,7 @@ function init() {
   els.sequenceForm.addEventListener("submit", handleSequenceSubmit);
   els.sequenceDialog.addEventListener("close", () => {
     pendingSequenceFrames = [];
-    sequencePlacement = null;
+    editingTokenAnimation = null;
   });
   els.sequencePlayerDialog.addEventListener("close", () => { sequencePlayback = null; });
   $("#closeSequence").addEventListener("click", () => els.sequencePlayerDialog.close());
