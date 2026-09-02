@@ -1278,8 +1278,7 @@ function renderMap() {
   els.stageHint.hidden = Boolean(map || currentScene().tokens.length || currentRole() === "player");
 }
 
-function renderCanvasObjects() {
-  const scene = currentScene();
+function renderVisionRangeLayer() {
   if (els.visionRangeLayer) {
     const rect = els.stage.getBoundingClientRect();
     const stageWidth = Math.max(1, rect.width);
@@ -1295,6 +1294,11 @@ function renderCanvasObjects() {
       els.visionRangeLayer.innerHTML = "";
     }
   }
+}
+
+function renderCanvasObjects() {
+  const scene = currentScene();
+  renderVisionRangeLayer();
   els.wallsLayer.innerHTML = currentRole() === "gm"
     ? scene.walls.map((wall) => `
       <line x1="${wall.a.x}" y1="${wall.a.y}" x2="${wall.b.x}" y2="${wall.b.y}" />`).join("")
@@ -2268,6 +2272,7 @@ function handleTokenDrag(event) {
   activeDrag.moved = true;
   activeDrag.element.style.left = `${token.x * 100}%`;
   activeDrag.element.style.top = `${token.y * 100}%`;
+  renderVisionRangeLayer();
   renderLighting();
   event.preventDefault();
 }
@@ -3305,7 +3310,10 @@ function init() {
   document.addEventListener("keydown", handleKeydown);
  document.addEventListener("keyup", handleKeyup);
   els.mapImage.addEventListener("load", renderLighting);
- window.addEventListener("resize", renderLighting);
+  window.addEventListener("resize", () => {
+    renderVisionRangeLayer();
+    renderLighting();
+  });
   if (window.ResizeObserver) new ResizeObserver(renderLighting).observe(els.stage);
   renderAll();
   initRealtime();
