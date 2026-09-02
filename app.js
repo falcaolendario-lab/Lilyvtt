@@ -11,7 +11,7 @@
 const STORAGE_KEY = "tabletop-rpg-beta-state-v1";
 const ONLINE_CREDENTIALS_KEY = "lilyvtt-online-credentials-v1";
 const AUTH_SESSION_KEY = "lilyvtt-auth-session-v1";
-const STATE_SCHEMA_VERSION = 7;
+const STATE_SCHEMA_VERSION = 8;
 const PLAYER_ID = "player-1";
 const DEFAULT_LIGHT_COLOR = "#f4c783";
 const MAX_TOKEN_ANIMATION_FRAMES = 12;
@@ -57,6 +57,7 @@ const els = {
   mapImage: $("#mapImage"),
   mapPlaceholder: $("#mapPlaceholder"),
   wallsLayer: $("#wallsLayer"),
+  gridLayer: $("#gridLayer"),
   lightingCanvas: $("#lightingCanvas"),
   visionRangeLayer: $("#visionRangeLayer"),
   darknessLayer: $("#darknessLayer"),
@@ -84,6 +85,13 @@ const els = {
   darknessOpacity: $("#darknessOpacity"),
   darknessOpacityValue: $("#darknessOpacityValue"),
   timeOfDay: $("#timeOfDay"),
+  gridEnabled: $("#gridEnabled"),
+  gridSnap: $("#gridSnap"),
+  gridSize: $("#gridSize"),
+  gridSizeValue: $("#gridSizeValue"),
+  gridOpacity: $("#gridOpacity"),
+  gridOpacityValue: $("#gridOpacityValue"),
+  wallType: $("#wallType"),
   newLightColor: $("#newLightColor"),
   selectionAvatar: $("#selectionAvatar"),
   selectionName: $("#selectionName"),
@@ -164,6 +172,7 @@ let pendingSequenceFrames = [];
 let editingTokenAnimation = null;
 let sequencePlayback = null;
 let wallDraftPoint = null;
+let activeWallDrag = null;
 let activeDrag = null;
 let activeAttackDrag = null;
 let armedAttack = null;
@@ -266,6 +275,7 @@ function initialState() {
         visionMaskEnabled: true,
         darknessOpacity: 0.82,
         timeOfDay: "day",
+        grid: { enabled: true, snap: true, size: 0.05, opacity: 0.22 },
         camera: { x: 0, y: 0, zoom: 1 },
         tokens: [],
         walls: [],
@@ -279,10 +289,12 @@ function initialState() {
       role: initialRole,
       activeTool: "select",
       selectedTokenId: null,
+      selectedWallId: null,
       selectedLightId: null,
       selectedDarknessId: null,
       gmLightingPreview: true,
       newLightColor: DEFAULT_LIGHT_COLOR,
+      wallType: "wall",
       panels: { leftOpen: false, rightOpen: false },
     },
   };
@@ -342,26 +354,86 @@ function normalizeTokens(tokens) {
   }, []);
 }
 
+function normalizeGrid(value) {
+  const source = value && typeof value === "object" ? value : {};
+  const size = Number(source.size);
+  const opacity = Number(source.opacity);
+  return {
+    enabled: source.enabled !== false,
+    snap: source.snap !== false,
+    size: clamp(Number.isFinite(size) ? size : 0.05, 0.03, 0.15),
+    opacity: clamp(Number.isFinite(opacity) ? opacity : 0.22, 0.05, 0.5),
+  };
+}
+
+function normalizeWallType(value) {
+  return ["wall", "door", "window"].includes(String(value)) ? String(value) : "wall";
+}
+
+function syncWallBlocking(wall) {
+  const type = normalizeWallType(wall?.type);
+  const open = type === "door" && wall?.open === true;
+  if (type === "door" || type === "window") {
+    wall.blocksMovement = type === "window" || !open;
+    wall.blocksVision = type === "window" ? false : !open;
+    wall.blocksLight = type === "window" ? false : !open;
+  } else {
+    wall.blocksMovement = wall.blocksMovement !== false;
+    wall.blocksVision = wall.blocksVision !== false;
+    wall.blocksLight = wall.blocksLight !== false;
+  }
+  return wall;
+}
+
+function wallBlocksMovement(wall) {
+  if (!wall) return false;
+  if (normalizeWallType(wall.type) === "window") return true;
+  if (normalizeWallType(wall.type) === "door") return wall.open !== true;
+  return wall.blocksMovement !== false;
+}
+
+function wallBlocksVision(wall) {
+  if (!wall) return false;
+  if (["door", "window"].includes(normalizeWallType(wall.type))) return normalizeWallType(wall.type) === "door" && wall.open !== true;
+  return wall.blocksVision !== false;
+}
+
+function wallBlocksLight(wall) {
+  if (!wall) return false;
+  if (["door", "window"].includes(normalizeWallType(wall.type))) return normalizeWallType(wall.type) === "door" && wall.open !== true;
+  return wall.blocksLight !== false;
+}
+
+function wallTypeLabel(wall) {
+  const type = normalizeWallType(wall?.type);
+  if (type === "door") return wall.open === true ? "Porta aberta" : "Porta fechada";
+  if (type === "window") return "Janela";
+  return "Parede";
+}
+
 function normalizeWalls(walls) {
   const sampleWallIds = new Set(["wall-a", "wall-b", "wall-c", "wall-d", "wall-divider", "wall-divider-2"]);
   const seenIds = new Set();
   return walls.reduce((normalizedWalls, wall) => {
     if (!wall || typeof wall !== "object" || sampleWallIds.has(wall.id)) return normalizedWalls;
-    const a = normalizePoint(wall.a);
-    const b = normalizePoint(wall.b);
+    const a = normalizePoint(wall.a || { x: wall.x1, y: wall.y1 });
+    const b = normalizePoint(wall.b || { x: wall.x2, y: wall.y2 });
     if (Math.hypot(a.x - b.x, a.y - b.y) < 0.004) return normalizedWalls;
     let id = String(wall.id || makeId("wall"));
     if (seenIds.has(id)) id = makeId("wall");
     seenIds.add(id);
-    normalizedWalls.push({
+    const type = normalizeWallType(wall.type);
+    const normalizedWall = {
       ...wall,
       id,
       a,
       b,
-      blocksMovement: wall.blocksMovement !== false,
-      blocksVision: wall.blocksVision !== false,
-      blocksLight: wall.blocksLight !== false,
-    });
+      type,
+      open: type === "door"
+        ? wall.open === true || (wall.open == null && wall.blocksMovement === false)
+        : false,
+    };
+    normalizedWalls.push(syncWallBlocking(normalizedWall));
     return normalizedWalls;
   }, []);
 }
@@ -493,6 +565,7 @@ function normalizeState(value) {
   };
 
   normalized.ui.newLightColor = normalizeHexColor(normalized.ui.newLightColor);
+  normalized.ui.wallType = normalizeWallType(normalized.ui.wallType);
 
   normalized.scenes = normalized.scenes.map((scene) => {
     const sceneWithoutLegacyAnalysis = { ...scene };
@@ -500,6 +573,7 @@ function normalizeState(value) {
     return {
       ...sceneWithoutLegacyAnalysis,
       camera: normalizeCamera(scene.camera),
+      grid: normalizeGrid(scene.grid),
       tokens: normalizeTokens((Array.isArray(scene.tokens) ? scene.tokens : [])
         .filter((token) => token?.id !== "token-example-player" && token?.id !== "token-example-gm")),
       walls: normalizeWalls(Array.isArray(scene.walls) ? scene.walls : []),
@@ -1098,6 +1172,53 @@ function renderCamera() {
   els.sceneViewport.style.transform = `translate3d(${camera.x}px, ${camera.y}px, 0) scale(${camera.zoom})`;
 }
 
+function gridCellSteps(scene = currentScene()) {
+  const grid = normalizeGrid(scene?.grid);
+  const rect = els.stage?.getBoundingClientRect?.() || { width: 1, height: 1 };
+  const width = Math.max(1, rect.width || 1);
+  const height = Math.max(1, rect.height || 1);
+  const cellPixels = Math.max(1, Math.min(width, height) * grid.size);
+  return {
+    grid,
+    cellPixels,
+    stepX: cellPixels / width,
+    stepY: cellPixels / height,
+  };
+}
+
+function snapPointToGrid(point, scene = currentScene()) {
+  const normalized = normalizePoint(point);
+  const { grid, stepX, stepY } = gridCellSteps(scene);
+  if (grid.snap === false) return normalized;
+  return {
+    x: clamp((Math.floor(normalized.x / stepX) + 0.5) * stepX, stepX / 2, 1 - stepX / 2),
+    y: clamp((Math.floor(normalized.y / stepY) + 0.5) * stepY, stepY / 2, 1 - stepY / 2),
+  };
+}
+
+function alignTokensToGrid(scene = currentScene()) {
+  const { grid } = gridCellSteps(scene);
+  if (grid.snap === false) return false;
+  let changed = false;
+  scene.tokens.forEach((token) => {
+    const next = snapPointToGrid(token, scene);
+    if (Math.abs(token.x - next.x) < 0.0001 && Math.abs(token.y - next.y) < 0.0001) return;
+    token.x = next.x;
+    token.y = next.y;
+    changed = true;
+  });
+  return changed;
+}
+
+function renderGrid() {
+  if (!els.gridLayer) return;
+  const { grid, cellPixels } = gridCellSteps();
+  els.gridLayer.hidden = grid.enabled === false;
+  els.gridLayer.style.opacity = String(grid.opacity);
+  els.gridLayer.style.backgroundSize = `${cellPixels}px ${cellPixels}px`;
+  els.gridLayer.style.backgroundPosition = "0 0";
+}
+
 function currentRole() {
   return state.ui.role === "player" ? "player" : "gm";
 }
@@ -1112,6 +1233,10 @@ function getBlueprint(blueprintId) {
 
 function getToken(tokenId) {
   return currentScene().tokens.find((token) => token.id === tokenId);
+}
+
+function getWall(wallId) {
+  return currentScene().walls.find((wall) => wall.id === wallId);
 }
 
 function getSequence(sequenceId) {
@@ -1439,6 +1564,7 @@ function executeTokenAttack(attackerId, targetId, attackType) {
   activeTokenImpacts.set(target.id, impact);
   armedAttack = null;
   state.ui.selectedTokenId = attacker.id;
+  state.ui.selectedWallId = null;
   state.ui.selectedLightId = null;
   state.ui.selectedDarknessId = null;
   renderAll();
@@ -1466,11 +1592,14 @@ function canInteractWithSequences() {
 }
 
 function renderAll() {
+  const aligned = currentRole() === "gm" ? alignTokensToGrid() : false;
+  if (aligned) saveState();
   renderShell();
   renderSidebar();
   renderToolbar();
   renderCamera();
   renderMap();
+  renderGrid();
   renderCanvasObjects();
   renderFooter();
   renderInspector();
@@ -1484,6 +1613,7 @@ function renderShell() {
   if (role === "player") {
     state.ui.activeTool = "select";
     wallDraftPoint = null;
+    state.ui.selectedWallId = null;
     state.ui.selectedLightId = null;
     state.ui.selectedDarknessId = null;
     if (state.ui.selectedTokenId && !isTokenVisibleToCurrentRole(getToken(state.ui.selectedTokenId))) {
@@ -1590,6 +1720,14 @@ function renderSidebar() {
   els.timeOfDay.value = Object.prototype.hasOwnProperty.call(TIME_OF_DAY_PRESETS, currentScene().timeOfDay)
     ? currentScene().timeOfDay
     : "day";
+  const sceneGrid = normalizeGrid(currentScene().grid);
+  els.gridEnabled.checked = sceneGrid.enabled !== false;
+  els.gridSnap.checked = sceneGrid.snap !== false;
+  els.gridSize.value = String(Math.round(sceneGrid.size * 100));
+  els.gridSizeValue.textContent = `${Math.round(sceneGrid.size * 100)}%`;
+  els.gridOpacity.value = String(Math.round(sceneGrid.opacity * 100));
+  els.gridOpacityValue.textContent = `${Math.round(sceneGrid.opacity * 100)}%`;
+  els.wallType.value = normalizeWallType(state.ui.wallType);
   updateLightPresetStyles();
   els.darknessOpacity.value = String(darknessOpacity);
   els.darknessOpacityValue.textContent = `${darknessOpacity}%`;
@@ -1613,7 +1751,9 @@ function renderToolbar() {
   if (currentRole() === "gm") {
     const messages = {
       select: "Arraste o fundo para mover · roda para zoom",
-      wall: wallDraftPoint ? "Escolha o segundo ponto da barreira" : "Clique em dois pontos para desenhar uma barreira",
+      wall: wallDraftPoint
+        ? `Escolha o segundo ponto · ${wallTypeLabel({ type: state.ui.wallType, open: false })}`
+        : `Clique em dois pontos para desenhar · ${wallTypeLabel({ type: state.ui.wallType, open: false })}`,
       light: "Clique no mapa para adicionar uma luz",
       darkness: "Arraste no mapa para criar uma área escura · clique para uma área padrão",
       animation: "Clique em um token para ativar sua animação",
@@ -1667,8 +1807,18 @@ function renderCanvasObjects() {
   const scene = currentScene();
   renderVisionRangeLayer();
   els.wallsLayer.innerHTML = currentRole() === "gm"
-    ? scene.walls.map((wall) => `
-      <line x1="${wall.a.x}" y1="${wall.a.y}" x2="${wall.b.x}" y2="${wall.b.y}" />`).join("")
+    ? scene.walls.map((wall) => {
+      const type = normalizeWallType(wall.type);
+      const selected = state.ui.selectedWallId === wall.id;
+      const openClass = type === "door" && wall.open === true ? " open" : "";
+      const status = wallTypeLabel(wall);
+      return `
+        <g class="wall-segment ${selected ? "selected" : ""}" data-wall-id="${escapeHtml(wall.id)}" tabindex="0" role="button" aria-label="${escapeHtml(status)}">
+          <line class="wall-select-hit" x1="${wall.a.x}" y1="${wall.a.y}" x2="${wall.b.x}" y2="${wall.b.y}" />
+          <line class="wall-edge wall-${type}${openClass}${selected ? " selected" : ""}" x1="${wall.a.x}" y1="${wall.a.y}" x2="${wall.b.x}" y2="${wall.b.y}" />
+          <title>${escapeHtml(status)} · clique para selecionar</title>
+        </g>`;
+    }).join("")
     : "";
 
   els.darknessLayer.innerHTML = scene.darknessZones.map((zone) => `
@@ -1723,6 +1873,7 @@ function renderCanvasObjects() {
     els.wallDraft.style.top = `${wallDraftPoint.y * 100}%`;
   }
   els.darknessDraft.hidden = !activeDarknessDraw;
+  bindWallInteractions();
   bindTokenInteractions();
   bindLightInteractions();
   bindDarknessInteractions();
@@ -1730,6 +1881,16 @@ function renderCanvasObjects() {
 }
 
 function renderFooter() {
+  const selectedWall = currentRole() === "gm" && state.ui.selectedWallId ? getWall(state.ui.selectedWallId) : null;
+  if (selectedWall) {
+    const type = normalizeWallType(selectedWall.type);
+    els.selectionAvatar.textContent = type === "door" ? "▣" : type === "window" ? "▤" : "╱";
+    els.selectionName.textContent = wallTypeLabel(selectedWall);
+    els.selectionDetail.textContent = "Arraste para mover · abra/edite no Inspector · Ctrl+X exclui";
+    els.hotkeyStrip.innerHTML = '<span class="eyebrow">PAREDE</span><span class="hotkey-placeholder">Portas e janelas podem ser alteradas no Inspector</span>';
+    return;
+  }
+
   const selectedLight = currentRole() === "gm" && state.ui.selectedLightId ? getLight(state.ui.selectedLightId) : null;
   if (selectedLight) {
     els.selectionAvatar.textContent = "✦";
@@ -1789,6 +1950,39 @@ function renderInspector() {
   if (currentRole() !== "gm") {
     els.inspectorTitle.textContent = "";
     els.inspectorContent.innerHTML = "";
+    return;
+  }
+  const wall = state.ui.selectedWallId ? getWall(state.ui.selectedWallId) : null;
+  if (wall) {
+    const type = normalizeWallType(wall.type);
+    els.inspectorTitle.textContent = "Parede / abertura";
+    els.inspectorContent.innerHTML = `
+      <div class="inspector-card">
+        <div class="eyebrow">WALL SEGMENT</div>
+        <div class="inspector-title">${escapeHtml(wallTypeLabel(wall))}</div>
+        <div class="inspector-meta">Arraste o segmento para reposicionar. Ele continua salvo nesta cena mesmo quando o mapa for trocado.</div>
+        <label class="field-label" for="selectedWallType">Tipo</label>
+        <select class="text-input" id="selectedWallType" data-wall-control="type" data-wall-id="${escapeHtml(wall.id)}">
+          <option value="wall" ${type === "wall" ? "selected" : ""}>Parede — bloqueia tudo</option>
+          <option value="door" ${type === "door" ? "selected" : ""}>Porta — abre e libera passagem</option>
+          <option value="window" ${type === "window" ? "selected" : ""}>Janela — passa visão e luz</option>
+        </select>
+        ${type === "door" ? `
+          <label class="switch-row inspector-switch-row">
+            <span><strong>Porta aberta</strong><small>Aberta libera movimento, visão e luz.</small></span>
+            <input type="checkbox" ${wall.open === true ? "checked" : ""} data-wall-control="open" data-wall-id="${escapeHtml(wall.id)}" />
+            <span class="switch-ui"></span>
+          </label>` : type === "window" ? `
+          <div class="permission-summary">
+            <div><span>Movimento</span><b>bloqueado</b></div>
+            <div><span>Visão / luz</span><b>liberadas</b></div>
+          </div>` : `
+          <div class="permission-summary">
+            <div><span>Movimento</span><b>bloqueado</b></div>
+            <div><span>Visão / luz</span><b>bloqueadas</b></div>
+          </div>`}
+        <button class="quiet-button full-width delete-button" data-action="delete-wall" data-id="${escapeHtml(wall.id)}">Excluir segmento</button>
+      </div>`;
     return;
   }
   const light = currentRole() === "gm" && state.ui.selectedLightId ? getLight(state.ui.selectedLightId) : null;
@@ -2071,7 +2265,7 @@ function hexToRgb(value) {
 
 function visibilityPolygon(source, walls) {
   const blockingWalls = walls.filter((wall) => {
-    const blocks = source.kind === "vision" ? wall.blocksVision !== false : wall.blocksLight !== false;
+    const blocks = source.kind === "vision" ? wallBlocksVision(wall) : wallBlocksLight(wall);
     return blocks && wall.a && wall.b && Math.hypot(wall.a.x - wall.b.x, wall.a.y - wall.b.y) >= 0.004;
   });
   const angles = [];
@@ -2178,7 +2372,7 @@ function handleStagePanStart(event) {
   if (![0, 1].includes(event.button)) return;
   const primaryPanAllowed = currentRole() === "player" || state.ui.activeTool === "select";
   if (event.button === 0 && !spaceHeld && !primaryPanAllowed) return;
-  if (!spaceHeld && event.target.closest(".token, .hotspot, .light-marker, .darkness-zone, .darkness-draft")) return;
+  if (!spaceHeld && event.target.closest(".token, .hotspot, .wall-segment, .light-marker, .darkness-zone, .darkness-draft")) return;
   const camera = currentCamera();
   activePan = {
     pointerId: event.pointerId,
@@ -2253,12 +2447,33 @@ function segmentsIntersect(a, b, c, d) {
   return false;
 }
 
+function distanceBetweenSegments(a, b, c, d) {
+  if (segmentsIntersect(a, b, c, d)) return 0;
+  return Math.min(
+    distancePointToSegment(a, c, d),
+    distancePointToSegment(b, c, d),
+    distancePointToSegment(c, a, b),
+    distancePointToSegment(d, a, b),
+  );
+}
+
+function tokenCollisionRadius(token) {
+  const rect = els.stage?.getBoundingClientRect?.() || { width: 1, height: 1 };
+  const aspect = Math.max(0.01, (rect.width || 1) / (rect.height || 1));
+  return (Number(token.size) || 0.08) * Math.max(1, aspect) / 2;
+}
+
 function movementWouldCollide(token, from, to) {
-  const radius = (Number(token.size) || 0.08) / 2;
+  const radius = tokenCollisionRadius(token);
   return currentScene().walls.some((wall) => {
-    if (wall.blocksMovement === false || !wall.a || !wall.b) return false;
+    if (!wallBlocksMovement(wall) || !wall.a || !wall.b) return false;
     if (Math.hypot(wall.a.x - wall.b.x, wall.a.y - wall.b.y) < 0.004) return false;
-    return segmentsIntersect(from, to, wall.a, wall.b) || distancePointToSegment(to, wall.a, wall.b) < radius;
+    const startDistance = distancePointToSegment(from, wall.a, wall.b);
+    const endDistance = distancePointToSegment(to, wall.a, wall.b);
+    const sweptDistance = distanceBetweenSegments(from, to, wall.a, wall.b);
+    return segmentsIntersect(from, to, wall.a, wall.b)
+      || endDistance <= radius
+      || (startDistance > radius && sweptDistance <= radius);
   });
 }
 
@@ -2277,6 +2492,14 @@ function updateLightSelectionStyles() {
 function updateDarknessSelectionStyles() {
   $$(".darkness-zone").forEach((element) => {
     element.classList.toggle("selected", element.dataset.darknessId === state.ui.selectedDarknessId);
+  });
+}
+
+function updateWallSelectionStyles() {
+  $$(".wall-segment").forEach((element) => {
+    const selected = element.dataset.wallId === state.ui.selectedWallId;
+    element.classList.toggle("selected", selected);
+    element.querySelector(".wall-edge")?.classList.toggle("selected", selected);
   });
 }
 
@@ -2360,6 +2583,105 @@ function finishTokenResize(event) {
   if (moved) {
     saveState();
     renderInspector();
+  }
+}
+
+function updateWallPresentation(wall, element = null) {
+  const group = element || els.wallsLayer.querySelector(`[data-wall-id="${CSS.escape(wall.id)}"]`);
+  if (!group) return;
+  const hit = group.querySelector(".wall-select-hit");
+  const edge = group.querySelector(".wall-edge");
+  [hit, edge].forEach((line) => {
+    if (!line) return;
+    line.setAttribute("x1", wall.a.x);
+    line.setAttribute("y1", wall.a.y);
+    line.setAttribute("x2", wall.b.x);
+    line.setAttribute("y2", wall.b.y);
+  });
+  const type = normalizeWallType(wall.type);
+  if (edge) {
+    edge.setAttribute("class", `wall-edge wall-${type}${type === "door" && wall.open === true ? " open" : ""}${state.ui.selectedWallId === wall.id ? " selected" : ""}`);
+  }
+  group.setAttribute("aria-label", wallTypeLabel(wall));
+  const title = group.querySelector("title");
+  if (title) title.textContent = `${wallTypeLabel(wall)} · clique para selecionar`;
+}
+
+function bindWallInteractions() {
+  if (currentRole() !== "gm") return;
+  $$(".wall-segment").forEach((element) => {
+    element.addEventListener("click", (event) => {
+      event.stopPropagation();
+      selectWall(element.dataset.wallId);
+    });
+    element.addEventListener("dblclick", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleWallOpen(element.dataset.wallId);
+    });
+    element.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || spaceHeld) return;
+      event.stopPropagation();
+      const wall = getWall(element.dataset.wallId);
+      if (!wall) return;
+      selectWall(wall.id, { refreshObjects: false });
+      if (state.ui.activeTool !== "select") return;
+      const point = clientToNormalized(event);
+      activeWallDrag = {
+        wallId: wall.id,
+        element,
+        pointerId: event.pointerId,
+        startPoint: point,
+        startA: { ...wall.a },
+        startB: { ...wall.b },
+        moved: false,
+      };
+      element.setPointerCapture?.(event.pointerId);
+      window.addEventListener("pointermove", handleWallDrag);
+      window.addEventListener("pointerup", finishWallDrag);
+      window.addEventListener("pointercancel", finishWallDrag);
+      event.preventDefault();
+    });
+    element.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        selectWall(element.dataset.wallId);
+      }
+    });
+  });
+}
+
+function handleWallDrag(event) {
+  if (!activeWallDrag || event.pointerId !== activeWallDrag.pointerId) return;
+  const wall = getWall(activeWallDrag.wallId);
+  if (!wall) return;
+  const point = clientToNormalized(event);
+  const rawDelta = {
+    x: point.x - activeWallDrag.startPoint.x,
+    y: point.y - activeWallDrag.startPoint.y,
+  };
+  const delta = {
+    x: clamp(rawDelta.x, 0.01 - Math.min(activeWallDrag.startA.x, activeWallDrag.startB.x), 0.99 - Math.max(activeWallDrag.startA.x, activeWallDrag.startB.x)),
+    y: clamp(rawDelta.y, 0.01 - Math.min(activeWallDrag.startA.y, activeWallDrag.startB.y), 0.99 - Math.max(activeWallDrag.startA.y, activeWallDrag.startB.y)),
+  };
+  wall.a = { x: activeWallDrag.startA.x + delta.x, y: activeWallDrag.startA.y + delta.y };
+  wall.b = { x: activeWallDrag.startB.x + delta.x, y: activeWallDrag.startB.y + delta.y };
+  activeWallDrag.moved = activeWallDrag.moved || Math.hypot(delta.x, delta.y) > 0.0005;
+  updateWallPresentation(wall, activeWallDrag.element);
+  renderLighting();
+  event.preventDefault();
+}
+
+function finishWallDrag(event) {
+  if (!activeWallDrag || (event?.pointerId != null && event.pointerId !== activeWallDrag.pointerId)) return;
+  window.removeEventListener("pointermove", handleWallDrag);
+  window.removeEventListener("pointerup", finishWallDrag);
+  window.removeEventListener("pointercancel", finishWallDrag);
+  const moved = activeWallDrag.moved;
+  activeWallDrag = null;
+  if (moved) {
+    saveState();
+    renderAll();
   }
 }
 
@@ -2575,7 +2897,7 @@ function renderDarknessDraft(start, end) {
 
 function handleDarknessDrawStart(event) {
   if (currentRole() !== "gm" || state.ui.activeTool !== "darkness" || event.button !== 0 || spaceHeld) return;
-  if (event.target.closest(".token, .hotspot, .light-marker, .darkness-zone")) return;
+  if (event.target.closest(".token, .hotspot, .wall-segment, .light-marker, .darkness-zone")) return;
   const start = clientToNormalized(event);
   activeDarknessDraw = { pointerId: event.pointerId, start, end: start };
   renderDarknessDraft(start, start);
@@ -2632,10 +2954,11 @@ function handleTokenDrag(event) {
   const token = getToken(activeDrag.tokenId);
   if (!token) return;
   const cursor = clientToNormalized(event);
-  const point = {
+  const rawPoint = {
     x: clamp(cursor.x + activeDrag.offsetX, 0.01, 0.99),
     y: clamp(cursor.y + activeDrag.offsetY, 0.01, 0.99),
   };
+  const point = snapPointToGrid(rawPoint);
   const previous = { x: token.x, y: token.y };
   if (movementWouldCollide(token, previous, point)) {
     activeDrag.blocked = true;
@@ -2669,11 +2992,13 @@ function finishTokenDrag(event) {
 
 function selectToken(tokenId, options = {}) {
   state.ui.selectedTokenId = tokenId;
+  state.ui.selectedWallId = null;
   state.ui.selectedLightId = null;
   state.ui.selectedDarknessId = null;
   if (options.refreshObjects !== false) renderCanvasObjects();
   else {
     updateSelectedTokenStyles();
+    updateWallSelectionStyles();
     updateLightSelectionStyles();
     updateDarknessSelectionStyles();
   }
@@ -2686,11 +3011,13 @@ function selectLight(lightId, options = {}) {
   if (activeAttackDrag) cancelAttackDrag();
   armedAttack = null;
   state.ui.selectedTokenId = null;
+  state.ui.selectedWallId = null;
   state.ui.selectedLightId = lightId;
   state.ui.selectedDarknessId = null;
   if (options.refreshObjects !== false) renderCanvasObjects();
   else {
     updateSelectedTokenStyles();
+    updateWallSelectionStyles();
     updateLightSelectionStyles();
     updateDarknessSelectionStyles();
   }
@@ -2703,11 +3030,32 @@ function selectDarkness(zoneId, options = {}) {
   if (activeAttackDrag) cancelAttackDrag();
   armedAttack = null;
   state.ui.selectedTokenId = null;
+  state.ui.selectedWallId = null;
   state.ui.selectedLightId = null;
   state.ui.selectedDarknessId = zoneId;
   if (options.refreshObjects !== false) renderCanvasObjects();
   else {
     updateSelectedTokenStyles();
+    updateWallSelectionStyles();
+    updateLightSelectionStyles();
+    updateDarknessSelectionStyles();
+  }
+  renderFooter();
+  renderInspector();
+}
+
+function selectWall(wallId, options = {}) {
+  if (currentRole() !== "gm" || !getWall(wallId)) return;
+  if (activeAttackDrag) cancelAttackDrag();
+  armedAttack = null;
+  state.ui.selectedTokenId = null;
+  state.ui.selectedWallId = wallId;
+  state.ui.selectedLightId = null;
+  state.ui.selectedDarknessId = null;
+  if (options.refreshObjects !== false) renderCanvasObjects();
+  else {
+    updateSelectedTokenStyles();
+    updateWallSelectionStyles();
     updateLightSelectionStyles();
     updateDarknessSelectionStyles();
   }
@@ -2719,6 +3067,7 @@ function clearSelection() {
   if (activeAttackDrag) cancelAttackDrag();
   armedAttack = null;
   state.ui.selectedTokenId = null;
+  state.ui.selectedWallId = null;
   state.ui.selectedLightId = null;
   state.ui.selectedDarknessId = null;
   renderCanvasObjects();
@@ -2751,8 +3100,21 @@ function deleteToken(tokenId = state.ui.selectedTokenId) {
 function deleteSelection() {
   if (currentRole() !== "gm") return;
   if (state.ui.selectedTokenId) return deleteToken();
+  if (state.ui.selectedWallId) return deleteWall();
   if (state.ui.selectedLightId) return deleteLight();
   if (state.ui.selectedDarknessId) return deleteDarkness();
+}
+
+function deleteWall(wallId = state.ui.selectedWallId) {
+  if (currentRole() !== "gm" || !wallId) return;
+  const scene = currentScene();
+  const index = scene.walls.findIndex((wall) => wall.id === wallId);
+  if (index < 0) return;
+  scene.walls.splice(index, 1);
+  state.ui.selectedWallId = null;
+  saveState();
+  renderAll();
+  showToast("Segmento excluído da cena.");
 }
 
 function deleteLight(lightId = state.ui.selectedLightId) {
@@ -2815,6 +3177,36 @@ function handleDarknessControl(event) {
   const element = els.darknessLayer.querySelector(`[data-darkness-id="${CSS.escape(zone.id)}"]`);
   if (element) element.style.setProperty("--darkness-opacity", zone.opacity);
   saveState();
+}
+
+function handleWallControl(event) {
+  if (currentRole() !== "gm") return;
+  const input = event.target.closest("[data-wall-control]");
+  if (!input) return;
+  const wall = getWall(input.dataset.wallId || state.ui.selectedWallId);
+  if (!wall) return;
+  const property = input.dataset.wallControl;
+  if (property === "type") {
+    wall.type = normalizeWallType(input.value);
+    wall.open = false;
+  }
+  if (property === "open" && normalizeWallType(wall.type) === "door") wall.open = input.checked;
+  syncWallBlocking(wall);
+  saveState();
+  renderAll();
+  showToast(`${wallTypeLabel(wall)} atualizado.`);
+}
+
+function toggleWallOpen(wallId) {
+  if (currentRole() !== "gm") return;
+  const wall = getWall(wallId);
+  if (!wall || normalizeWallType(wall.type) !== "door") return;
+  wall.open = wall.open !== true;
+  syncWallBlocking(wall);
+  state.ui.selectedWallId = wall.id;
+  saveState();
+  renderAll();
+  showToast(`${wallTypeLabel(wall)}.`);
 }
 
 function handleTokenControl(event) {
@@ -2886,7 +3278,7 @@ function handleStageClick(event) {
     suppressStageClick = false;
     return;
   }
-  if (event.target.closest(".token, .hotspot, .light-marker, .darkness-zone")) return;
+  if (event.target.closest(".token, .hotspot, .wall-segment, .light-marker, .darkness-zone")) return;
   if (currentRole() !== "gm") {
     clearSelection();
     return;
@@ -2900,18 +3292,23 @@ function handleStageClick(event) {
       renderToolbar();
       return;
     }
-    currentScene().walls.push({
+    const wall = {
       id: makeId("wall"),
       a: wallDraftPoint,
       b: point,
-      blocksMovement: true,
-      blocksVision: true,
-      blocksLight: true,
-    });
+      type: normalizeWallType(state.ui.wallType),
+      open: false,
+    };
+    syncWallBlocking(wall);
+    currentScene().walls.push(wall);
     wallDraftPoint = null;
+    state.ui.selectedTokenId = null;
+    state.ui.selectedWallId = wall.id;
+    state.ui.selectedLightId = null;
+    state.ui.selectedDarknessId = null;
     saveState();
     renderAll();
-    showToast("Barreira salva na cena.");
+    showToast(`${wallTypeLabel(wall)} salva na cena. Clique para editar ou arrastar.`);
     return;
   }
   if (tool === "light") {
@@ -2920,6 +3317,7 @@ function handleStageClick(event) {
     const light = { id: makeId("light"), x: point.x, y: point.y, radius: 0.2, falloff: 0.72, intensity: 1, color, providesVision: true };
     currentScene().lights.push(light);
     state.ui.selectedTokenId = null;
+    state.ui.selectedWallId = null;
     state.ui.selectedLightId = light.id;
     state.ui.selectedDarknessId = null;
     saveState();
@@ -2938,6 +3336,7 @@ function handleStageClick(event) {
     };
     currentScene().darknessZones.push(zone);
     state.ui.selectedTokenId = null;
+    state.ui.selectedWallId = null;
     state.ui.selectedLightId = null;
     state.ui.selectedDarknessId = zone.id;
     saveState();
@@ -2958,13 +3357,17 @@ function addBlueprintToScene(blueprintId) {
   if (!blueprint) return;
   const scene = currentScene();
   const index = scene.tokens.length;
+  const position = snapPointToGrid({
+    x: clamp(0.34 + (index % 4) * 0.1, 0.08, 0.92),
+    y: clamp(0.35 + Math.floor(index / 4) * 0.12, 0.08, 0.92),
+  }, scene);
   const token = {
     id: makeId("token"),
     blueprintId,
     ownerId: blueprint.ownerId || PLAYER_ID,
     visibleToPlayers: true,
-    x: clamp(0.34 + (index % 4) * 0.1, 0.08, 0.92),
-    y: clamp(0.35 + Math.floor(index / 4) * 0.12, 0.08, 0.92),
+    x: position.x,
+    y: position.y,
     size: blueprint.defaultSize || 0.08,
     activeKey: blueprint.defaultKey || blueprint.images?.[0]?.key || "1",
     rotation: 0,
@@ -3299,9 +3702,10 @@ async function handleTokenSubmit(event) {
       const blueprint = { id: makeId("blueprint"), name, ownerId: els.tokenOwner.value, images, defaultKey, animations: [], defaultSize: 0.08 };
       state.library.tokenBlueprints.push(blueprint);
       const scene = currentScene();
+      const position = snapPointToGrid({ x: 0.44, y: 0.5 }, scene);
       const token = {
         id: makeId("token"), blueprintId: blueprint.id, ownerId: blueprint.ownerId, visibleToPlayers: true,
-        x: 0.44, y: 0.5, size: blueprint.defaultSize, activeKey: defaultKey, rotation: 0,
+        x: position.x, y: position.y, size: blueprint.defaultSize, activeKey: defaultKey, rotation: 0,
         visionRange: blueprint.ownerId === PLAYER_ID ? 0.32 : 0,
       };
       scene.tokens.push(token);
@@ -3412,7 +3816,7 @@ function createScene() {
   const name = window.prompt("Nome da nova cena", `Cena ${state.scenes.length + 1}`)?.trim();
   if (!name) return;
  const scene = {
-   id: makeId("scene"), name, mapAssetId: null, camera: { x: 0, y: 0, zoom: 1 }, globalIllumination: false, visionMaskEnabled: true, darknessOpacity: 0.82, timeOfDay: "day",
+   id: makeId("scene"), name, mapAssetId: null, camera: { x: 0, y: 0, zoom: 1 }, globalIllumination: false, visionMaskEnabled: true, darknessOpacity: 0.82, timeOfDay: "day", grid: { enabled: true, snap: true, size: 0.05, opacity: 0.22 },
     tokens: [], walls: [], lights: [], darknessZones: [], hotspots: [],
   };
   state.scenes.push(scene);
@@ -3519,6 +3923,7 @@ function handleDelegatedClick(event) {
   if (actionName === "play-token-animation") playTokenAnimation(id, action.dataset.animationId);
   if (actionName === "edit-token-animation") openTokenAnimationDialog(id, action.dataset.animationId);
   if (actionName === "edit-blueprint-animation") openBlueprintAnimationDialog(id, action.dataset.animationId);
+  if (actionName === "delete-wall") deleteWall(id);
   if (actionName === "delete-light") deleteLight(id);
   if (actionName === "delete-darkness") deleteDarkness(id);
   if (actionName === "delete-token") deleteToken(id);
@@ -3652,6 +4057,47 @@ function init() {
     renderAll();
     showToast(`Cena em ${TIME_OF_DAY_PRESETS[nextTime].label.toLowerCase()} · ${TIME_OF_DAY_PRESETS[nextTime].hint}.`);
   });
+  els.gridEnabled.addEventListener("change", () => {
+    if (currentRole() !== "gm") return;
+    const grid = normalizeGrid(currentScene().grid);
+    grid.enabled = els.gridEnabled.checked;
+    currentScene().grid = grid;
+    saveState();
+    renderAll();
+  });
+  els.gridSnap.addEventListener("change", () => {
+    if (currentRole() !== "gm") return;
+    const grid = normalizeGrid(currentScene().grid);
+    grid.snap = els.gridSnap.checked;
+    currentScene().grid = grid;
+    saveState();
+    renderAll();
+    showToast(grid.snap ? "Tokens serão centralizados no grid ao mover." : "Encaixe no grid desligado.");
+  });
+  els.gridSize.addEventListener("input", () => {
+    if (currentRole() !== "gm") return;
+    const grid = normalizeGrid(currentScene().grid);
+    grid.size = clamp(Number(els.gridSize.value) / 100, 0.03, 0.15);
+    currentScene().grid = grid;
+    els.gridSizeValue.textContent = `${Math.round(grid.size * 100)}%`;
+    saveState();
+    renderAll();
+  });
+  els.gridOpacity.addEventListener("input", () => {
+    if (currentRole() !== "gm") return;
+    const grid = normalizeGrid(currentScene().grid);
+    grid.opacity = clamp(Number(els.gridOpacity.value) / 100, 0.05, 0.5);
+    currentScene().grid = grid;
+    els.gridOpacityValue.textContent = `${Math.round(grid.opacity * 100)}%`;
+    renderGrid();
+    saveState();
+  });
+  els.wallType.addEventListener("change", () => {
+    if (currentRole() !== "gm") return;
+    state.ui.wallType = normalizeWallType(els.wallType.value);
+    saveState();
+    renderToolbar();
+  });
   els.newLightColor.addEventListener("input", () => {
    if (currentRole() !== "gm") return;
    state.ui.newLightColor = normalizeHexColor(els.newLightColor.value);
@@ -3660,6 +4106,7 @@ function init() {
  });
   els.inspectorContent.addEventListener("input", handleLightControl);
   els.inspectorContent.addEventListener("input", handleDarknessControl);
+  els.inspectorContent.addEventListener("change", handleWallControl);
  els.inspectorContent.addEventListener("input", handleTokenControl);
   $$('[data-permission]').forEach((input) => input.addEventListener("change", () => {
     if (currentRole() !== "gm") return;
@@ -3718,10 +4165,15 @@ function init() {
   });
   els.mapImage.addEventListener("load", renderLighting);
   window.addEventListener("resize", () => {
+    renderGrid();
     renderVisionRangeLayer();
     renderLighting();
   });
-  if (window.ResizeObserver) new ResizeObserver(renderLighting).observe(els.stage);
+  if (window.ResizeObserver) new ResizeObserver(() => {
+    renderGrid();
+    renderVisionRangeLayer();
+    renderLighting();
+  }).observe(els.stage);
   renderAuthGate();
   renderAll();
   initRealtime();
