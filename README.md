@@ -16,9 +16,11 @@ Protótipo de um VTT leve com foco em uma experiência simples como uma mesa com
 - redimensionamento direto dos tokens pelos cantos ou pela roda do mouse;
 - exclusão de qualquer objeto selecionado com `Ctrl+X` (`Delete` também funciona);
 - câmera com arraste do fundo, zoom pela roda do mouse e botão de centralizar;
-- grid quadrado sempre visível, com linhas finas e baixa opacidade;
-- barreiras desenhadas no canvas;
-- colisão básica de movimento;
+- grid quadrado configurável, com linhas finas e baixa opacidade;
+- tokens que se encaixam no centro das células do grid;
+- paredes desenhadas no canvas, com tipos parede, porta e janela;
+- portas que podem ser abertas/fechadas e janelas que deixam passar visão/luz, mas bloqueiam movimento;
+- colisão de movimento considerando o corpo do token e as aberturas;
 - máscara de visão com luz suave e barreiras;
 - áreas escuras manuais, texturizadas e reposicionáveis;
 - hotspots narrativos;
@@ -36,8 +38,10 @@ Protótipo de um VTT leve com foco em uma experiência simples como uma mesa com
 5. Arraste o fundo para mover a câmera; use a roda do mouse para aproximar ou afastar.
 6. Selecione o token e teste as teclas `1`, `2` e `3`.
 7. Troque o mapa na Biblioteca: o token continua salvo na cena.
-8. Use `W` para desenhar uma barreira, `L` para colocar uma luz, `D` para criar uma área escura e `H` para testar uma animação.
-9. Alterne para Player e teste as permissões.
+8. No painel **Cena**, escolha o tipo de segmento e use `W` para desenhar uma parede, porta ou janela. Selecione um segmento para arrastar, editar ou excluir; dê duplo clique numa porta para abrir/fechar.
+9. Ainda no painel **Cena**, ajuste o grid e deixe **Centralizar tokens no grid** ligado para posicionar os tokens no centro das células.
+10. Use `L` para colocar uma luz, `D` para criar uma área escura e `H` para testar uma animação.
+11. Alterne para Player e teste as permissões.
 
 No modo Mestre, selecione um token para mostrar os quatro cantos de redimensionamento. Desative `Visível para Players` no Inspector para ocultá-lo sem removê-lo da cena.
 
