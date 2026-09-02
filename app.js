@@ -10,7 +10,7 @@
 
 const STORAGE_KEY = "tabletop-rpg-beta-state-v1";
 const ONLINE_CREDENTIALS_KEY = "lilyvtt-online-credentials-v1";
-const STATE_SCHEMA_VERSION = 5;
+const STATE_SCHEMA_VERSION = 6;
 const PLAYER_ID = "player-1";
 const DEFAULT_LIGHT_COLOR = "#f4c783";
 const MAX_TOKEN_ANIMATION_FRAMES = 12;
@@ -52,6 +52,7 @@ const els = {
   mapPlaceholder: $("#mapPlaceholder"),
   wallsLayer: $("#wallsLayer"),
   lightingCanvas: $("#lightingCanvas"),
+  visionRangeLayer: $("#visionRangeLayer"),
   darknessLayer: $("#darknessLayer"),
   lightsLayer: $("#lightsLayer"),
   hotspotsLayer: $("#hotspotsLayer"),
@@ -134,6 +135,7 @@ let realtime = {
 };
 let onlineStateTimer = null;
 let editingBlueprintId = null;
+let editingDefaultFrameId = null;
 let pendingTokenFiles = [];
 let pendingSequenceFrames = [];
 let editingTokenAnimation = null;
@@ -407,6 +409,29 @@ function normalizeTokenAnimations(animations) {
   }, []);
 }
 
+function normalizeTokenBlueprint(blueprint) {
+  const source = blueprint && typeof blueprint === "object" ? blueprint : {};
+  const images = (Array.isArray(source.images) ? source.images : [])
+    .slice(0, 9)
+    .map((image, index) => ({
+      ...(image || {}),
+      key: String(image?.key || index + 1),
+      label: String(image?.label || `Estado ${index + 1}`),
+      src: image?.src ? String(image.src) : "",
+    }));
+  const firstKey = images[0]?.key || "1";
+  const defaultKey = images.some((image) => image.key === String(source.defaultKey))
+    ? String(source.defaultKey)
+    : firstKey;
+  return {
+    ...source,
+    images,
+    defaultKey,
+    defaultSize: clamp(Number(source.defaultSize) || 0.08, 0.025, 0.5),
+    animations: normalizeTokenAnimations(source.animations),
+  };
+}
+
 function normalizeState(value) {
   const base = initialState();
   const loaded = value && typeof value === "object" ? value : {};
@@ -421,10 +446,7 @@ function normalizeState(value) {
       ...(loaded.library || {}),
       maps: Array.isArray(loaded.library?.maps) ? loaded.library.maps : base.library.maps,
       tokenBlueprints: Array.isArray(loaded.library?.tokenBlueprints)
-        ? loaded.library.tokenBlueprints.map((blueprint) => ({
-          ...blueprint,
-          animations: normalizeTokenAnimations(blueprint?.animations),
-        }))
+        ? loaded.library.tokenBlueprints.map(normalizeTokenBlueprint)
         : base.library.tokenBlueprints,
       sequences: Array.isArray(loaded.library?.sequences) ? loaded.library.sequences : base.library.sequences,
     },
@@ -747,7 +769,7 @@ function isLightingPreviewActive() {
 
 function getTokenImage(token) {
   const blueprint = getBlueprint(token.blueprintId);
-  return blueprint?.images?.find((image) => image.key === String(token.activeKey)) || blueprint?.images?.[0] || null;
+  return blueprint?.images?.find((image) => String(image.key) === String(token.activeKey)) || blueprint?.images?.[0] || null;
 }
 
 function getTokenAnimations(token) {
@@ -1258,6 +1280,21 @@ function renderMap() {
 
 function renderCanvasObjects() {
   const scene = currentScene();
+  if (els.visionRangeLayer) {
+    const rect = els.stage.getBoundingClientRect();
+    const stageWidth = Math.max(1, rect.width);
+    const stageHeight = Math.max(1, rect.height);
+    const minDimension = Math.min(stageWidth, stageHeight);
+    const selectedVisionToken = currentRole() === "gm"
+      ? scene.tokens.find((token) => token.id === state.ui.selectedTokenId && isTokenVisibleToCurrentRole(token) && Number(token.visionRange) > 0)
+      : null;
+    if (selectedVisionToken) {
+      const diameter = selectedVisionToken.visionRange * minDimension;
+      els.visionRangeLayer.innerHTML = `<div class="vision-range" style="left:${selectedVisionToken.x * 100}%;top:${selectedVisionToken.y * 100}%;width:${(diameter / stageWidth) * 100}%;height:${(diameter / stageHeight) * 100}%;"><span>${Math.round(selectedVisionToken.visionRange * 100)}%</span></div>`;
+    } else {
+      els.visionRangeLayer.innerHTML = "";
+    }
+  }
   els.wallsLayer.innerHTML = currentRole() === "gm"
     ? scene.walls.map((wall) => `
       <line x1="${wall.a.x}" y1="${wall.a.y}" x2="${wall.b.x}" y2="${wall.b.y}" />`).join("")
@@ -1364,7 +1401,7 @@ function renderFooter() {
   const animations = getTokenAnimations(token);
   const canEditToken = canChangeTokenImage(token);
   const stateButtons = canEditToken && images.length
-    ? images.map((item) => `<button class="hotkey available ${String(token.activeKey) === String(item.key) ? "current" : ""}" data-action="select-state" data-id="${escapeHtml(token.id)}" data-state-key="${escapeHtml(item.key)}" title="${escapeHtml(item.label || `Estado ${item.key}`)}">${escapeHtml(item.key)}</button>`).join("")
+    ? images.map((item) => `<button class="hotkey available state-hotkey ${String(token.activeKey) === String(item.key) ? "current" : ""}" data-action="select-state" data-id="${escapeHtml(token.id)}" data-state-key="${escapeHtml(item.key)}" title="Clique para usar ${escapeHtml(item.label || `Estado ${item.key}`)}"><img src="${escapeHtml(item.src)}" alt="" /><span>${escapeHtml(item.key)}</span></button>`).join("")
     : canEditToken
       ? '<span class="hotkey-placeholder">Adicione imagens ao token para habilitar 1–9</span>'
       : '<span class="hotkey-placeholder">Somente o dono ou o Mestre pode mudar este estado.</span>';
@@ -1456,7 +1493,7 @@ function renderInspector() {
         <div class="permission-summary">
           <div><span>Dono</span><b>${escapeHtml(state.members.find((member) => member.id === token.ownerId)?.name || "Mestre")}</b></div>
           <div><span>Posição</span><b>${Math.round(token.x * 100)}% / ${Math.round(token.y * 100)}%</b></div>
-         <div><span>Visão</span><b>${token.visionRange ? `${Math.round(token.visionRange * 100)}u` : "desligada"}</b></div>
+         <div><span>Luz / visão</span><b>${token.visionRange ? `${Math.round(token.visionRange * 100)}%` : "desligada"}</b></div>
        </div>
         <label class="range-row inspector-range">
           <span><strong>Tamanho</strong><output data-token-output="size">${Math.round(token.size * 100)}%</output></span>
@@ -1466,6 +1503,11 @@ function renderInspector() {
           <span><strong>Rotação</strong><output data-token-output="rotation">${Math.round(Number(token.rotation) || 0)}°</output></span>
           <input type="range" min="-180" max="180" step="1" value="${Math.round(Number(token.rotation) || 0)}" data-token-control="rotation" data-token-id="${escapeHtml(token.id)}" />
         </label>
+        <label class="range-row inspector-range">
+          <span><strong>Luz ao redor do token</strong><output data-token-output="visionRange">${token.visionRange ? `${Math.round(token.visionRange * 100)}%` : "desligada"}</output></span>
+          <input type="range" min="0" max="200" step="1" value="${Math.round((Number(token.visionRange) || 0) * 100)}" data-token-control="visionRange" data-token-id="${escapeHtml(token.id)}" aria-label="Alcance da luz e visão do token" />
+        </label>
+        <small class="inspector-help">Arraste para ajustar o alcance. Zero desliga a luz; o círculo aparece quando o token está selecionado.</small>
         <label class="switch-row inspector-switch-row">
           <span><strong>Visível para Players</strong><small>Desative para esconder este token sem removê-lo da cena.</small></span>
           <input type="checkbox" ${token.visibleToPlayers !== false ? "checked" : ""} data-token-control="visibleToPlayers" data-token-id="${escapeHtml(token.id)}" />
@@ -1475,10 +1517,10 @@ function renderInspector() {
       </div>
       <div class="inspector-card">
         <div class="eyebrow">IMAGE STATES</div>
-        <div class="inspector-meta">Use as teclas numéricas no canvas ou selecione um estado.</div>
+        <div class="inspector-meta">Clique diretamente numa imagem para aplicar o estado. As teclas 1–9 continuam disponíveis no canvas.</div>
         <div class="inspector-states">${images.length ? images.map((item) => `
-          <button class="state-button ${String(token.activeKey) === String(item.key) ? "current" : ""}" data-action="select-state" data-id="${escapeHtml(token.id)}" data-state-key="${escapeHtml(item.key)}">
-            <img src="${escapeHtml(item.src)}" alt="" /><span>${escapeHtml(item.key)}</span>
+          <button class="state-button ${String(token.activeKey) === String(item.key) ? "current" : ""}" data-action="select-state" data-id="${escapeHtml(token.id)}" data-state-key="${escapeHtml(item.key)}" title="Usar ${escapeHtml(item.label || `Estado ${item.key}`)}">
+            <img src="${escapeHtml(item.src)}" alt="" /><span>${escapeHtml(item.key)} · ${escapeHtml(item.label || `Estado ${item.key}`)}</span>
           </button>`).join("") : '<div class="empty-list" style="grid-column:1/-1">Este token ainda usa o fallback de texto. Edite-o para adicionar imagens.</div>'}</div>
         <button class="quiet-button full-width" data-action="edit-token" data-id="${escapeHtml(token.blueprintId)}" style="margin-top:10px">Editar token na biblioteca</button>
       </div>`;
@@ -2404,6 +2446,7 @@ function handleTokenControl(event) {
   const property = input.dataset.tokenControl;
   if (property === "size") token.size = clamp(Number(input.value) / 100, 0.025, 0.5);
   if (property === "rotation") token.rotation = clamp(Number(input.value), -180, 180);
+  if (property === "visionRange") token.visionRange = clamp(Number(input.value) / 100, 0, 2);
   if (property === "visibleToPlayers") token.visibleToPlayers = input.checked;
   if (property === "visibleToPlayers") {
     saveState();
@@ -2413,12 +2456,17 @@ function handleTokenControl(event) {
     return;
   }
   const output = els.inspectorContent.querySelector('[data-token-output="' + property + '"]');
-  if (output) output.textContent = property === "size" ? Math.round(token.size * 100) + "%" : Math.round(token.rotation) + "°";
+  if (output) {
+    if (property === "size") output.textContent = Math.round(token.size * 100) + "%";
+    if (property === "rotation") output.textContent = Math.round(token.rotation) + "°";
+    if (property === "visionRange") output.textContent = token.visionRange ? Math.round(token.visionRange * 100) + "%" : "desligada";
+  }
   const element = els.tokensLayer.querySelector('[data-token-id="' + CSS.escape(token.id) + '"]');
   if (element) {
     element.style.setProperty("--token-size", (token.size * 100) + "%");
     element.style.transform = "translate(-50%,-50%) rotate(" + token.rotation + "deg)";
   }
+  if (property === "visionRange") renderCanvasObjects();
   renderLighting();
   saveState();
 }
@@ -2538,7 +2586,7 @@ function addBlueprintToScene(blueprintId) {
     x: clamp(0.34 + (index % 4) * 0.1, 0.08, 0.92),
     y: clamp(0.35 + Math.floor(index / 4) * 0.12, 0.08, 0.92),
     size: blueprint.defaultSize || 0.08,
-    activeKey: blueprint.images?.[0]?.key || "1",
+    activeKey: blueprint.defaultKey || blueprint.images?.[0]?.key || "1",
     rotation: 0,
     visionRange: blueprint.ownerId === PLAYER_ID ? 0.32 : 0,
   };
@@ -2577,6 +2625,9 @@ function openTokenDialog(blueprintId = null) {
   pendingTokenFiles = [];
   removedTokenImageKeys = new Set();
   const blueprint = blueprintId ? getBlueprint(blueprintId) : null;
+  editingDefaultFrameId = blueprint?.images?.length
+    ? `existing:${blueprint.defaultKey || blueprint.images[0].key}`
+    : null;
   els.tokenDialogTitle.textContent = blueprint ? "Editar token" : "Novo token";
   els.tokenName.value = blueprint?.name || "";
   els.tokenOwner.value = blueprint?.ownerId || PLAYER_ID;
@@ -2599,12 +2650,17 @@ function renderFramePreview() {
     ...existing.map((image) => ({ ...image, id: `existing:${image.key}`, name: image.fileName || "Estado salvo" })),
     ...pending,
   ];
+  if (!editingDefaultFrameId || !frames.some((frame) => frame.id === editingDefaultFrameId)) {
+    editingDefaultFrameId = frames[0]?.id || null;
+  }
   els.framePreview.innerHTML = frames.map((frame, index) => `
-    <div class="frame-preview-item" data-frame-id="${escapeHtml(frame.id)}">
-      ${frame.src ? `<img src="${escapeHtml(frame.src)}" alt="Prévia do estado ${index + 1}" />` : '<span class="frame-preview-empty">＋</span>'}
+    <div class="frame-preview-item ${editingDefaultFrameId === frame.id ? "selected" : ""}" data-frame-id="${escapeHtml(frame.id)}">
+      <button class="frame-preview-image-button" type="button" data-frame-select="${escapeHtml(frame.id)}" title="Usar esta imagem como padrão">
+        ${frame.src ? `<img src="${escapeHtml(frame.src)}" alt="Prévia do estado ${index + 1}" />` : '<span class="frame-preview-empty">＋</span>'}
+      </button>
       <div class="frame-preview-copy">
         <strong>Estado ${index + 1}</strong>
-        <small title="${escapeHtml(frame.name)}">${escapeHtml(frame.name)}</small>
+        <small title="${escapeHtml(frame.name)}">${escapeHtml(frame.name)}${editingDefaultFrameId === frame.id ? " · padrão" : ""}</small>
         <input class="frame-label-input" data-frame-label="${escapeHtml(frame.id)}" type="text" maxlength="30" value="${escapeHtml(frame.label || `Estado ${index + 1}`)}" aria-label="Nome do estado ${index + 1}" />
       </div>
       <button class="remove-state-button" type="button" data-remove-frame="${escapeHtml(frame.id)}" title="Remover estado" aria-label="Remover estado ${index + 1}">×</button>
@@ -2831,34 +2887,41 @@ async function handleTokenSubmit(event) {
     const keptExisting = (existingBlueprint?.images || []).filter((image) => !removedTokenImageKeys.has(String(image.key)));
     const uploaded = await Promise.all(pendingTokenFiles.slice(0, Math.max(0, 9 - keptExisting.length)).map((file) => fileToDataUrl(file)));
     const images = [];
+    const frameIds = [];
     const previousToNextKey = new Map();
     keptExisting.forEach((image) => {
       if (images.length >= 9) return;
       const nextKey = String(images.length + 1);
       previousToNextKey.set(String(image.key), nextKey);
       images.push({ ...image, key: nextKey, label: labels.get(`existing:${image.key}`) || image.label || `Estado ${nextKey}` });
+      frameIds.push(`existing:${image.key}`);
     });
     uploaded.forEach((src, index) => {
       if (!src || images.length >= 9) return;
       const nextKey = String(images.length + 1);
       images.push({ key: nextKey, label: labels.get(`pending:${index}`) || `Estado ${nextKey}`, src, fileName: pendingTokenFiles[index]?.name || "imagem" });
+      frameIds.push(`pending:${index}`);
     });
+    const defaultImageIndex = frameIds.indexOf(editingDefaultFrameId);
+    const defaultKey = images[defaultImageIndex]?.key || images[0]?.key || "1";
 
     if (existingBlueprint) {
       existingBlueprint.name = name;
       existingBlueprint.ownerId = els.tokenOwner.value;
       existingBlueprint.images = images;
+      existingBlueprint.defaultKey = defaultKey;
       state.scenes.forEach((scene) => scene.tokens.forEach((token) => {
         if (token.blueprintId !== existingBlueprint.id) return;
-        token.activeKey = previousToNextKey.get(String(token.activeKey)) || images[0]?.key || "1";
+        token.ownerId = existingBlueprint.ownerId;
+        token.activeKey = previousToNextKey.get(String(token.activeKey)) || defaultKey;
       }));
     } else {
-      const blueprint = { id: makeId("blueprint"), name, ownerId: els.tokenOwner.value, images, animations: [], defaultSize: 0.08 };
+      const blueprint = { id: makeId("blueprint"), name, ownerId: els.tokenOwner.value, images, defaultKey, animations: [], defaultSize: 0.08 };
       state.library.tokenBlueprints.push(blueprint);
       const scene = currentScene();
       const token = {
         id: makeId("token"), blueprintId: blueprint.id, ownerId: blueprint.ownerId, visibleToPlayers: true,
-        x: 0.44, y: 0.5, size: blueprint.defaultSize, activeKey: images[0]?.key || "1", rotation: 0,
+        x: 0.44, y: 0.5, size: blueprint.defaultSize, activeKey: defaultKey, rotation: 0,
         visionRange: blueprint.ownerId === PLAYER_ID ? 0.32 : 0,
       };
       scene.tokens.push(token);
@@ -3030,6 +3093,14 @@ function handleDelegatedClick(event) {
     saveState();
     return;
   }
+  const frameSelect = event.target.closest("[data-frame-select]");
+  if (frameSelect) {
+    event.preventDefault();
+    if (currentRole() !== "gm") return;
+    editingDefaultFrameId = frameSelect.dataset.frameSelect || null;
+    renderFramePreview();
+    return;
+  }
   const frameMove = event.target.closest("[data-sequence-frame-move]");
   if (frameMove) {
     event.preventDefault();
@@ -3054,6 +3125,7 @@ function handleDelegatedClick(event) {
     } else if (frameId.startsWith("existing:")) {
       removedTokenImageKeys.add(frameId.slice("existing:".length));
     }
+    if (editingDefaultFrameId === frameId) editingDefaultFrameId = null;
     renderFramePreview();
     return;
   }
