@@ -10,7 +10,7 @@
       content="Beta de um tabletop web para RPG com cenas, tokens, permissões, luz e animações temporárias."
     />
     <title>Tabletop RPG — Beta</title>
-    <link rel="stylesheet" href="styles.css?v=16" />
+    <link rel="stylesheet" href="styles.css?v=17" />
   </head>
   <body data-role="gm">
     <div class="app-shell">
@@ -137,9 +137,37 @@
             </select>
             <small class="form-help">O horário muda o clima e a luz ambiente. Luzes, barreiras e áreas escuras continuam independentes.</small>
 
+            <div class="section-label"><span>GRID E ENCAIXE</span></div>
+            <label class="switch-row">
+              <span><strong>Mostrar grid</strong><small>Linhas suaves para orientar o posicionamento.</small></span>
+              <input type="checkbox" id="gridEnabled" checked />
+              <span class="switch-ui"></span>
+            </label>
+            <label class="switch-row">
+              <span><strong>Centralizar tokens no grid</strong><small>Ao mover, o centro do token cai no centro da célula.</small></span>
+              <input type="checkbox" id="gridSnap" checked />
+              <span class="switch-ui"></span>
+            </label>
+            <label class="range-row" for="gridSize">
+              <span><strong>Tamanho das células</strong><output id="gridSizeValue">5%</output></span>
+              <input id="gridSize" type="range" min="3" max="15" value="5" step="1" />
+            </label>
+            <label class="range-row" for="gridOpacity">
+              <span><strong>Intensidade do grid</strong><output id="gridOpacityValue">22%</output></span>
+              <input id="gridOpacity" type="range" min="5" max="50" value="22" step="1" />
+            </label>
+            <small class="form-help">O tamanho usa o menor lado do mapa para manter as células quadradas.</small>
+
             <div class="section-label"><span>FERRAMENTAS</span></div>
+            <label class="field-label" for="wallType">Tipo do próximo segmento</label>
+            <select class="text-input" id="wallType">
+              <option value="wall">Parede — bloqueia tudo</option>
+              <option value="door">Porta fechada — pode abrir depois</option>
+              <option value="window">Janela — passa visão e luz</option>
+            </select>
+            <small class="form-help">Escolha o tipo e use Paredes para clicar nos dois pontos do segmento.</small>
             <div class="tool-explainer">
-              <div><span class="tool-key">W</span><span>Barreira</span></div>
+              <div><span class="tool-key">W</span><span>Paredes</span></div>
               <div><span class="tool-key">L</span><span>Luz</span></div>
               <div><span class="tool-key">D</span><span>Escuridão</span></div>
               <div><span class="tool-key">H</span><span>Animação</span></div>
@@ -156,7 +184,7 @@
               <button class="light-preset" type="button" data-light-preset="#a6efb0" style="--preset-color:#a6efb0"><span class="light-preset-swatch" aria-hidden="true"></span>Verde</button>
               <button class="light-preset" type="button" data-light-preset="#c7a7ff" style="--preset-color:#c7a7ff"><span class="light-preset-swatch" aria-hidden="true"></span>Violeta</button>
             </div>
-            <p class="muted-copy">As barreiras ficam invisíveis para os players e controlam movimento, visão e luz. Áreas escuras podem ser colocadas, movidas e excluídas pelo Mestre.</p>
+            <p class="muted-copy">Paredes ficam invisíveis para os Players e controlam movimento, visão e luz. Portas abertas liberam passagem; janelas deixam ver e iluminar, mas continuam bloqueando movimento.</p>
           </section>
 
           <section class="side-panel" id="accessPanel">
@@ -200,7 +228,7 @@
           <div class="stage-toolbar">
             <div class="toolbar-group gm-only" id="gmToolbar">
               <button class="tool-button active" data-tool="select" title="Selecionar (V)"><span>↖</span><em>Selecionar</em></button>
-              <button class="tool-button" data-tool="wall" title="Desenhar barreira (W)"><span>╱</span><em>Barreira</em></button>
+              <button class="tool-button" data-tool="wall" title="Desenhar parede, porta ou janela (W)"><span>╱</span><em>Paredes</em></button>
               <button class="tool-button" data-tool="light" title="Adicionar luz (L)"><span>◌</span><em>Luz</em></button>
               <button class="tool-button" data-tool="darkness" title="Criar área escura (D)"><span>◼</span><em>Escuridão</em></button>
               <button class="tool-button" data-tool="animation" title="Ativar animação de um token (H)"><span>✦</span><em>Animação</em></button>
@@ -386,6 +414,6 @@
     </section>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="app.js?v=17" defer></script>
+    <script src="app.js?v=18" defer></script>
   </body>
 </html>
