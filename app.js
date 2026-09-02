@@ -10,7 +10,8 @@
 
 const STORAGE_KEY = "tabletop-rpg-beta-state-v1";
 const ONLINE_CREDENTIALS_KEY = "lilyvtt-online-credentials-v1";
-const STATE_SCHEMA_VERSION = 6;
+const AUTH_SESSION_KEY = "lilyvtt-auth-session-v1";
+const STATE_SCHEMA_VERSION = 7;
 const PLAYER_ID = "player-1";
 const DEFAULT_LIGHT_COLOR = "#f4c783";
 const MAX_TOKEN_ANIMATION_FRAMES = 12;
@@ -26,6 +27,11 @@ const TOKEN_ANIMATION_TRIGGERS = {
   shot: { label: "Disparo", hint: "Toca quando este ataque é escolhido" },
   physical: { label: "Ataque físico", hint: "Toca quando este ataque é escolhido" },
   impact: { label: "Impacto recebido", hint: "Toca quando o token é atingido" },
+};
+const TIME_OF_DAY_PRESETS = {
+  day: { label: "Dia", hint: "luz aberta", darknessMultiplier: 0.1, tint: null },
+  afternoon: { label: "Tarde", hint: "tom quente", darknessMultiplier: 0.42, tint: "rgba(255, 157, 86, 0.1)" },
+  night: { label: "Noite", hint: "depende das luzes", darknessMultiplier: 1, tint: "rgba(28, 48, 112, 0.16)" },
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -77,6 +83,7 @@ const els = {
   gmLightingPreview: $("#gmLightingPreview"),
   darknessOpacity: $("#darknessOpacity"),
   darknessOpacityValue: $("#darknessOpacityValue"),
+  timeOfDay: $("#timeOfDay"),
   newLightColor: $("#newLightColor"),
   selectionAvatar: $("#selectionAvatar"),
   selectionName: $("#selectionName"),
@@ -108,6 +115,21 @@ const els = {
   sequenceText: $("#sequenceText"),
   previousFrame: $("#previousFrame"),
   nextFrame: $("#nextFrame"),
+  accountButton: $("#accountButton"),
+  authGate: $("#authGate"),
+  authTitle: $("#authTitle"),
+  authLoginTab: $("#authLoginTab"),
+  authSignupTab: $("#authSignupTab"),
+  authForm: $("#authForm"),
+  authNameLabel: $("#authNameLabel"),
+  authName: $("#authName"),
+  authEmail: $("#authEmail"),
+  authPassword: $("#authPassword"),
+  authSubmit: $("#authSubmit"),
+  continueLocal: $("#continueLocal"),
+  authLogout: $("#authLogout"),
+  authAccountSummary: $("#authAccountSummary"),
+  authMessage: $("#authMessage"),
   toast: $("#toast"),
 };
 
@@ -120,6 +142,7 @@ const serverHint = requestedServerUrl || window.LILY_SERVER_URL || pageServerUrl
 const isGithubPages = /\.github\.io$/i.test(window.location.hostname);
 const onlineServerBase = normalizeServerBase(serverHint || (!isGithubPages ? window.location.origin : ""));
 const initialRole = launchedAsPlayer ? "player" : "gm";
+let stateStorageKey = STORAGE_KEY;
 let state = loadState();
 let realtime = {
   socket: null,
@@ -154,6 +177,16 @@ let spaceHeld = false;
 let cameraSaveTimer = null;
 let tokenTransformSaveTimer = null;
 let toastTimer = null;
+let authUser = null;
+let authSessionToken = "";
+let authMode = "login";
+let authGateVisible = false;
+let authMessageText = "";
+let authMessageError = false;
+let authBusy = false;
+let localMode = false;
+let accountWorkspaceLoaded = false;
+let accountSaveTimer = null;
 let removedTokenImageKeys = new Set();
 let framePreviewUrls = [];
 const activeTokenAnimations = new Map();
@@ -232,6 +265,7 @@ function initialState() {
         globalIllumination: false,
         visionMaskEnabled: true,
         darknessOpacity: 0.82,
+        timeOfDay: "day",
         camera: { x: 0, y: 0, zoom: 1 },
         tokens: [],
         walls: [],
@@ -256,7 +290,7 @@ function initialState() {
 
 function loadState() {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(stateStorageKey);
     if (!raw) return initialState();
     return normalizeState(JSON.parse(raw));
   } catch (error) {
@@ -479,6 +513,7 @@ function normalizeState(value) {
       globalIllumination: Boolean(scene.globalIllumination),
       visionMaskEnabled: scene.visionMaskEnabled !== false,
       darknessOpacity: Number.isFinite(Number(scene.darknessOpacity)) ? clamp(Number(scene.darknessOpacity), 0, 0.98) : 0.82,
+      timeOfDay: Object.prototype.hasOwnProperty.call(TIME_OF_DAY_PRESETS, String(scene.timeOfDay)) ? String(scene.timeOfDay) : "day",
     };
   });
 
@@ -490,16 +525,322 @@ function normalizeState(value) {
   return normalized;
 }
 
-function saveState({ sync = true } = {}) {
+function accountStorageKey(accountId) {
+  return `${STORAGE_KEY}:account:${encodeURIComponent(String(accountId || "unknown"))}`;
+}
+
+function saveState({ sync = true, accountSync = true } = {}) {
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    window.localStorage.setItem(stateStorageKey, JSON.stringify(state));
     els.saveIndicator.innerHTML = '<span class="status-dot"></span> salvo localmente';
     if (sync && !realtime.applyingRemote) scheduleRealtimeState();
+    if (accountSync && !realtime.applyingRemote) scheduleAccountStateSave();
   } catch (error) {
     els.saveIndicator.innerHTML = '<span class="status-dot" style="background:var(--rose)"></span> armazenamento cheio';
     showToast("O armazenamento local atingiu o limite. Use imagens menores no beta.", true);
     console.warn("Não foi possível salvar o estado local.", error);
   }
+}
+
+function readStoredAuthSession() {
+  try {
+    const session = JSON.parse(window.localStorage.getItem(AUTH_SESSION_KEY) || "null");
+    if (!session || session.serverUrl !== onlineServerBase || !session.sessionToken) return null;
+    return session;
+  } catch {
+    return null;
+  }
+}
+
+function storeAuthSession(sessionToken) {
+  if (!sessionToken || !onlineServerBase) return;
+  try {
+    window.localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify({
+      serverUrl: onlineServerBase,
+      sessionToken: String(sessionToken),
+    }));
+  } catch (error) {
+    console.warn("Não foi possível guardar a sessão do Mestre.", error);
+  }
+}
+
+function clearStoredAuthSession() {
+  try {
+    window.localStorage.removeItem(AUTH_SESSION_KEY);
+  } catch {
+    // O modo local continua funcionando mesmo sem acesso ao armazenamento.
+  }
+}
+
+function apiRequest(path, options = {}) {
+  const headers = new Headers(options.headers || {});
+  if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  if (authSessionToken) headers.set("Authorization", `Bearer ${authSessionToken}`);
+  return fetch(`${onlineServerBase}${path}`, {
+    ...options,
+    headers,
+    credentials: "include",
+  });
+}
+
+async function responsePayload(response) {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+function setAuthMessage(message = "", isError = false) {
+  authMessageText = String(message || "");
+  authMessageError = Boolean(isError);
+  if (!els.authMessage) return;
+  els.authMessage.textContent = authMessageText;
+  els.authMessage.classList.toggle("error", authMessageError);
+  els.authMessage.classList.toggle("success", Boolean(authMessageText) && !authMessageError);
+}
+
+function renderAuthGate() {
+  if (!els.authGate) return;
+  const isPlayer = launchedAsPlayer;
+  const loggedIn = Boolean(authUser);
+  const visible = !isPlayer && authGateVisible;
+  els.authGate.hidden = !visible;
+  els.body.classList.toggle("auth-gate-open", visible);
+  if (els.accountButton) {
+    els.accountButton.hidden = isPlayer;
+    els.accountButton.textContent = loggedIn
+      ? `Conta · ${authUser.name || authUser.email}`
+      : "Entrar como Mestre";
+    els.accountButton.title = loggedIn ? `Conta do Mestre: ${authUser.email}` : "Entrar ou criar conta de Mestre";
+  }
+  if (!visible) return;
+  if (els.authTitle) els.authTitle.textContent = loggedIn ? "Conta do Mestre" : "Entre na sua mesa";
+  if (els.authAccountSummary) {
+    els.authAccountSummary.hidden = !loggedIn;
+    els.authAccountSummary.innerHTML = loggedIn
+      ? `<strong>${escapeHtml(authUser.name || "Mestre")}</strong><small>${escapeHtml(authUser.email || "")} · biblioteca isolada nesta conta</small>`
+      : "";
+  }
+  [els.authLoginTab, els.authSignupTab].forEach((tab) => { if (tab) tab.hidden = loggedIn; });
+  const formHidden = loggedIn;
+  if (els.authForm) els.authForm.hidden = formHidden;
+  if (els.authNameLabel) els.authNameLabel.hidden = loggedIn || authMode !== "signup";
+  if (els.authName) {
+    els.authName.hidden = loggedIn || authMode !== "signup";
+    els.authName.required = !loggedIn && authMode === "signup";
+  }
+  if (els.authEmail) els.authEmail.disabled = loggedIn || authBusy;
+  if (els.authPassword) els.authPassword.disabled = loggedIn || authBusy;
+  if (els.authSubmit) {
+    els.authSubmit.disabled = loggedIn || authBusy;
+    els.authSubmit.textContent = authBusy ? "Aguarde…" : (authMode === "signup" ? "Criar conta" : "Entrar");
+  }
+  if (els.continueLocal) {
+    els.continueLocal.hidden = false;
+    els.continueLocal.disabled = authBusy;
+    els.continueLocal.textContent = loggedIn ? "Continuar no LilyVTT" : "Usar modo local";
+  }
+  if (els.authLogout) {
+    els.authLogout.hidden = !loggedIn;
+    els.authLogout.disabled = authBusy;
+  }
+  if (els.authMessage) {
+    els.authMessage.textContent = authMessageText;
+    els.authMessage.classList.toggle("error", authMessageError);
+    els.authMessage.classList.toggle("success", Boolean(authMessageText) && !authMessageError);
+  }
+  if (els.authLoginTab) {
+    els.authLoginTab.classList.toggle("active", authMode === "login");
+    els.authLoginTab.setAttribute("aria-selected", String(authMode === "login"));
+  }
+  if (els.authSignupTab) {
+    els.authSignupTab.classList.toggle("active", authMode === "signup");
+    els.authSignupTab.setAttribute("aria-selected", String(authMode === "signup"));
+  }
+}
+
+function openAuthGate(message = "") {
+  if (launchedAsPlayer) return;
+  authGateVisible = true;
+  if (message) setAuthMessage(message);
+  renderAuthGate();
+}
+
+function closeAuthGate() {
+  authGateVisible = false;
+  renderAuthGate();
+}
+
+function stopRealtimeConnection() {
+  window.clearTimeout(realtime.reconnectTimer);
+  realtime.reconnectTimer = null;
+  realtime.shouldReconnect = false;
+  if (realtime.socket && realtime.socket.readyState < 2) realtime.socket.close();
+  realtime.socket = null;
+  realtime.connected = false;
+  realtime.connecting = false;
+  realtime.shouldReconnect = true;
+}
+
+async function saveAccountStateNow() {
+  if (!authUser || !onlineServerBase || !accountWorkspaceLoaded || realtime.applyingRemote) return;
+  try {
+    const response = await apiRequest("/api/account/state", {
+      method: "PUT",
+      body: JSON.stringify({ state }),
+    });
+    const payload = await responsePayload(response);
+    if (!response.ok) throw new Error(payload?.error || "Não foi possível salvar a conta.");
+    els.saveIndicator.innerHTML = '<span class="status-dot"></span> salvo na conta';
+  } catch (error) {
+    console.warn("Não foi possível salvar o espaço do Mestre.", error);
+    if (authUser) showToast("A alteração ficou salva neste dispositivo, mas não chegou à conta online.", true);
+  }
+}
+
+function scheduleAccountStateSave() {
+  if (!authUser || !onlineServerBase || !accountWorkspaceLoaded || realtime.applyingRemote) return;
+  window.clearTimeout(accountSaveTimer);
+  accountSaveTimer = window.setTimeout(() => {
+    accountSaveTimer = null;
+    saveAccountStateNow();
+  }, 900);
+}
+
+async function loadAccountWorkspace() {
+  if (!authUser || !onlineServerBase || accountWorkspaceLoaded) return;
+  stateStorageKey = accountStorageKey(authUser.id);
+  try {
+    const response = await apiRequest("/api/account/state");
+    const payload = await responsePayload(response);
+    if (!response.ok) throw new Error(payload?.error || "Não foi possível carregar a conta.");
+    state = payload?.state ? normalizeState(payload.state) : initialState();
+  } catch (error) {
+    throw error;
+  }
+  state.ui.role = "gm";
+  state.ui.activeTool = "select";
+  state.ui.selectedTokenId = null;
+  state.ui.selectedLightId = null;
+  state.ui.selectedDarknessId = null;
+  accountWorkspaceLoaded = true;
+  saveState({ sync: false, accountSync: false });
+}
+
+async function activateAccount(user, sessionToken = "") {
+  authUser = {
+    id: String(user?.id || ""),
+    name: String(user?.name || "Mestre"),
+    email: String(user?.email || ""),
+  };
+  authSessionToken = String(sessionToken || "");
+  if (authSessionToken) storeAuthSession(authSessionToken);
+  localMode = false;
+  accountWorkspaceLoaded = false;
+  await loadAccountWorkspace();
+  setAuthMessage("");
+  closeAuthGate();
+  renderAll();
+}
+
+async function restoreAuthSession() {
+  if (!onlineServerBase || launchedAsPlayer) return false;
+  const stored = readStoredAuthSession();
+  if (stored) authSessionToken = stored.sessionToken;
+  try {
+    const response = await apiRequest("/api/auth/me");
+    const payload = await responsePayload(response);
+    if (!response.ok || !payload?.user?.id) {
+      authSessionToken = "";
+      if (stored) clearStoredAuthSession();
+      return false;
+    }
+    await activateAccount(payload.user, "");
+    return true;
+  } catch (error) {
+    console.warn("Não foi possível restaurar a sessão do Mestre.", error);
+    return false;
+  }
+}
+
+async function handleAuthSubmit(event) {
+  event.preventDefault();
+  if (authBusy) return;
+  if (!onlineServerBase) {
+    setAuthMessage("Abra o LilyVTT pelo endereço online para criar uma conta. O modo local está disponível abaixo.", true);
+    renderAuthGate();
+    return;
+  }
+  authBusy = true;
+  setAuthMessage(authMode === "signup" ? "Criando sua conta…" : "Entrando…");
+  renderAuthGate();
+  try {
+    const endpoint = authMode === "signup" ? "/api/auth/signup" : "/api/auth/login";
+    const body = {
+      name: els.authName?.value?.trim(),
+      email: els.authEmail?.value?.trim(),
+      password: els.authPassword?.value || "",
+    };
+    const response = await apiRequest(endpoint, { method: "POST", body: JSON.stringify(body) });
+    const payload = await responsePayload(response);
+    if (!response.ok || !payload?.user?.id) throw new Error(payload?.error || "Não foi possível acessar a conta.");
+    await activateAccount(payload.user, payload.sessionToken || "");
+    if (els.authPassword) els.authPassword.value = "";
+    showToast(authMode === "signup" ? "Conta criada; seu espaço de Mestre está pronto." : "Conta carregada; biblioteca restaurada.");
+    await initRealtime();
+  } catch (error) {
+    setAuthMessage(error.message || "Não foi possível acessar a conta.", true);
+    openAuthGate();
+  } finally {
+    authBusy = false;
+    renderAuthGate();
+  }
+}
+
+function enterLocalMode() {
+  stopRealtimeConnection();
+  window.clearTimeout(accountSaveTimer);
+  accountSaveTimer = null;
+  authUser = null;
+  authSessionToken = "";
+  accountWorkspaceLoaded = false;
+  localMode = true;
+  stateStorageKey = STORAGE_KEY;
+  state = loadState();
+  state.ui.role = "gm";
+  state.ui.activeTool = "select";
+  setAuthMessage("");
+  closeAuthGate();
+  renderAll();
+  updateConnectionStatus("offline", "somente local");
+}
+
+async function logoutAccount() {
+  if (authBusy) return;
+  authBusy = true;
+  renderAuthGate();
+  try {
+    if (onlineServerBase) await apiRequest("/api/auth/logout", { method: "POST" });
+  } catch (error) {
+    console.warn("Não foi possível encerrar a sessão online.", error);
+  }
+  stopRealtimeConnection();
+  window.clearTimeout(accountSaveTimer);
+  accountSaveTimer = null;
+  clearStoredAuthSession();
+  authUser = null;
+  authSessionToken = "";
+  accountWorkspaceLoaded = false;
+  localMode = false;
+  stateStorageKey = STORAGE_KEY;
+  state = initialState();
+  state.ui.role = "gm";
+  authBusy = false;
+  authMode = "login";
+  setAuthMessage("Você saiu da conta. Entre novamente ou continue em modo local.");
+  openAuthGate();
+  renderAll();
 }
 
 function updateConnectionStatus(status, message) {
@@ -519,8 +860,10 @@ function updateConnectionStatus(status, message) {
 
 function readOnlineCredentials() {
   try {
-    const credentials = JSON.parse(window.localStorage.getItem(ONLINE_CREDENTIALS_KEY) || "null");
+    const storageKey = authUser ? `${ONLINE_CREDENTIALS_KEY}:${encodeURIComponent(authUser.id)}` : ONLINE_CREDENTIALS_KEY;
+    const credentials = JSON.parse(window.localStorage.getItem(storageKey) || "null");
     if (!credentials || credentials.serverUrl !== onlineServerBase || !credentials.roomId || !credentials.gmToken) return null;
+    if (authUser && credentials.accountId !== authUser.id) return null;
     return credentials;
   } catch {
     return null;
@@ -529,10 +872,12 @@ function readOnlineCredentials() {
 
 function storeOnlineCredentials(credentials) {
   try {
-    window.localStorage.setItem(ONLINE_CREDENTIALS_KEY, JSON.stringify({
+    const storageKey = authUser ? `${ONLINE_CREDENTIALS_KEY}:${encodeURIComponent(authUser.id)}` : ONLINE_CREDENTIALS_KEY;
+    window.localStorage.setItem(storageKey, JSON.stringify({
       serverUrl: onlineServerBase,
       roomId: credentials.roomId,
       gmToken: credentials.gmToken,
+      accountId: authUser?.id || null,
     }));
   } catch (error) {
     console.warn("Não foi possível guardar a credencial da sala online.", error);
@@ -647,9 +992,8 @@ function connectRealtime(roomId, role, gmToken = "") {
 }
 
 async function createOnlineRoom() {
-  const response = await fetch(`${onlineServerBase}/api/rooms`, {
+  const response = await apiRequest("/api/rooms", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ state }),
   });
   let payload = null;
@@ -668,15 +1012,16 @@ async function createOnlineRoom() {
 }
 
 async function initRealtime() {
-  if (!onlineServerBase) {
-    updateConnectionStatus("offline", "somente local");
-    return;
-  }
-  if (!window.WebSocket) {
-    updateConnectionStatus("error", "WebSocket indisponível");
-    return;
-  }
   if (launchedAsPlayer) {
+    if (!onlineServerBase) {
+      updateConnectionStatus("error", "link sem servidor");
+      showToast("Este link precisa do endereço do servidor online.", true);
+      return;
+    }
+    if (!window.WebSocket) {
+      updateConnectionStatus("error", "WebSocket indisponível");
+      return;
+    }
     if (!requestedRoomId) {
       updateConnectionStatus("error", "link sem sala");
       showToast("Este link de Player não contém uma sala online.", true);
@@ -685,8 +1030,26 @@ async function initRealtime() {
     connectRealtime(requestedRoomId, "player");
     return;
   }
+  if (!onlineServerBase) {
+    updateConnectionStatus("offline", "somente local");
+    if (!localMode) openAuthGate("O endereço online ainda não está configurado nesta página.");
+    return;
+  }
+  if (!window.WebSocket) {
+    updateConnectionStatus("error", "WebSocket indisponível");
+    return;
+  }
+  if (!authUser) {
+    const restored = await restoreAuthSession();
+    if (!restored) {
+      updateConnectionStatus("offline", "entre para salvar online");
+      openAuthGate("Entre ou crie uma conta para guardar sua biblioteca e suas cenas.");
+      return;
+    }
+  }
 
   try {
+    if (!accountWorkspaceLoaded) await loadAccountWorkspace();
     let credentials = readOnlineCredentials();
     if (!credentials) credentials = await createOnlineRoom();
     state.room.id = credentials.roomId;
@@ -700,7 +1063,7 @@ async function initRealtime() {
 }
 
 function syncStateFromAnotherTab(event) {
-  if (event.key !== STORAGE_KEY || !event.newValue) return;
+  if (event.key !== stateStorageKey || !event.newValue) return;
   try {
     const localUi = state.ui;
     const incomingState = normalizeState(JSON.parse(event.newValue));
@@ -1224,6 +1587,9 @@ function renderSidebar() {
   const darknessOpacity = Math.round((currentScene().darknessOpacity ?? 0.82) * 100);
   els.gmLightingPreview.checked = state.ui.gmLightingPreview !== false;
   els.newLightColor.value = normalizeHexColor(state.ui.newLightColor);
+  els.timeOfDay.value = Object.prototype.hasOwnProperty.call(TIME_OF_DAY_PRESETS, currentScene().timeOfDay)
+    ? currentScene().timeOfDay
+    : "day";
   updateLightPresetStyles();
   els.darknessOpacity.value = String(darknessOpacity);
   els.darknessOpacityValue.textContent = `${darknessOpacity}%`;
@@ -1280,6 +1646,7 @@ function renderMap() {
 
 function renderVisionRangeLayer() {
   if (els.visionRangeLayer) {
+    const scene = currentScene();
     const rect = els.stage.getBoundingClientRect();
     const stageWidth = Math.max(1, rect.width);
     const stageHeight = Math.max(1, rect.height);
@@ -1600,8 +1967,9 @@ function renderLighting() {
   context.clearRect(0, 0, width, height);
 
   const scene = currentScene();
-  const ambientOpacity = clamp(Number.isFinite(Number(scene.darknessOpacity)) ? Number(scene.darknessOpacity) : 0.82, 0, 0.98);
-  const shouldMask = isLightingPreviewActive() && scene.visionMaskEnabled !== false && !scene.globalIllumination && ambientOpacity > 0.001;
+  const timeOfDay = TIME_OF_DAY_PRESETS[scene.timeOfDay] || TIME_OF_DAY_PRESETS.day;
+  const baseDarkness = clamp(Number.isFinite(Number(scene.darknessOpacity)) ? Number(scene.darknessOpacity) : 0.82, 0, 0.98);
+  const ambientOpacity = clamp(baseDarkness * timeOfDay.darknessMultiplier, 0, 0.98);
   const sources = [];
   scene.tokens
     .filter((token) => {
@@ -1626,14 +1994,21 @@ function renderLighting() {
     kind: "light",
   }));
 
-  // Sem uma fonte de visão, o mapa continua legível. A máscara só entra
-  // quando existe uma visão/luz que possa abrir o campo de visão.
-  if (!shouldMask || !sources.length) {
+  const shouldPreview = isLightingPreviewActive();
+  const shouldMask = shouldPreview && scene.visionMaskEnabled !== false && !scene.globalIllumination
+    && ambientOpacity > 0.001 && (sources.length > 0 || scene.timeOfDay === "night");
+  const shouldTint = shouldPreview && Boolean(timeOfDay.tint);
+  if (!shouldMask && !shouldTint) {
     canvas.hidden = true;
     return;
   }
   canvas.hidden = false;
   context.globalCompositeOperation = "source-over";
+  if (shouldTint) {
+    context.fillStyle = timeOfDay.tint;
+    context.fillRect(0, 0, width, height);
+  }
+  if (!shouldMask) return;
   context.fillStyle = "rgba(4, 7, 12, " + ambientOpacity + ")";
   context.fillRect(0, 0, width, height);
 
@@ -3037,7 +3412,7 @@ function createScene() {
   const name = window.prompt("Nome da nova cena", `Cena ${state.scenes.length + 1}`)?.trim();
   if (!name) return;
  const scene = {
-   id: makeId("scene"), name, mapAssetId: null, camera: { x: 0, y: 0, zoom: 1 }, globalIllumination: false, visionMaskEnabled: true, darknessOpacity: 0.82,
+   id: makeId("scene"), name, mapAssetId: null, camera: { x: 0, y: 0, zoom: 1 }, globalIllumination: false, visionMaskEnabled: true, darknessOpacity: 0.82, timeOfDay: "day",
     tokens: [], walls: [], lights: [], darknessZones: [], hotspots: [],
   };
   state.scenes.push(scene);
@@ -3267,6 +3642,16 @@ function init() {
     renderLighting();
     saveState();
   });
+  els.timeOfDay.addEventListener("change", () => {
+    if (currentRole() !== "gm") return;
+    const nextTime = Object.prototype.hasOwnProperty.call(TIME_OF_DAY_PRESETS, els.timeOfDay.value)
+      ? els.timeOfDay.value
+      : "day";
+    currentScene().timeOfDay = nextTime;
+    saveState();
+    renderAll();
+    showToast(`Cena em ${TIME_OF_DAY_PRESETS[nextTime].label.toLowerCase()} · ${TIME_OF_DAY_PRESETS[nextTime].hint}.`);
+  });
   els.newLightColor.addEventListener("input", () => {
    if (currentRole() !== "gm") return;
    state.ui.newLightColor = normalizeHexColor(els.newLightColor.value);
@@ -3308,13 +3693,36 @@ function init() {
   els.nextFrame.addEventListener("click", () => advanceSequence(1));
   document.addEventListener("click", handleDelegatedClick);
   document.addEventListener("keydown", handleKeydown);
- document.addEventListener("keyup", handleKeyup);
+  document.addEventListener("keyup", handleKeyup);
+  els.authLoginTab.addEventListener("click", () => {
+    if (authBusy) return;
+    authMode = "login";
+    setAuthMessage("");
+    renderAuthGate();
+  });
+  els.authSignupTab.addEventListener("click", () => {
+    if (authBusy) return;
+    authMode = "signup";
+    setAuthMessage("");
+    renderAuthGate();
+  });
+  els.authForm.addEventListener("submit", handleAuthSubmit);
+  els.continueLocal.addEventListener("click", () => {
+    if (authUser) closeAuthGate();
+    else enterLocalMode();
+  });
+  els.authLogout.addEventListener("click", logoutAccount);
+  els.accountButton.addEventListener("click", () => {
+    if (authUser) setAuthMessage("");
+    openAuthGate();
+  });
   els.mapImage.addEventListener("load", renderLighting);
   window.addEventListener("resize", () => {
     renderVisionRangeLayer();
     renderLighting();
   });
   if (window.ResizeObserver) new ResizeObserver(renderLighting).observe(els.stage);
+  renderAuthGate();
   renderAll();
   initRealtime();
 }
