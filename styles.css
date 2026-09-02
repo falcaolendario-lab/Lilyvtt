@@ -522,3 +522,31 @@ body.linked-player .role-switch { display: none; }
   .auth-card { padding: 24px 20px; }
   .auth-card h1 { font-size: 23px; }
 }
+
+/* LilyVTT: identidade clara com vermelho vivo; o palco continua escuro para o mapa. */
+:root { color-scheme: light; --bg:#f4f1f1; --surface:#fff; --surface-2:#f8f4f4; --surface-3:#efe7e8; --line:#e2d3d5; --line-strong:#c9afb3; --text:#241719; --muted:#765f63; --faint:#a78e92; --cyan:#c41f35; --cyan-strong:#9e1528; --amber:#b21d31; --rose:#8d1327; --violet:#9c4351; --shadow:0 18px 50px rgba(92,29,36,.14); }
+body { background:var(--bg); color:var(--text); }
+.topbar { background:#fff; border-bottom-color:var(--line); box-shadow:0 5px 22px rgba(104,36,43,.08); }
+.brand-mark { border-color:var(--cyan-strong); color:var(--cyan); background:#fff5f6; box-shadow:inset 0 0 18px rgba(196,31,53,.1); }
+.brand-name, .room-identity strong, .panel-heading h2, .sidebar-topline h1, .inspector-topline h2 { color:var(--text); }
+.workspace { background:#eee7e8; }
+.left-sidebar, .right-inspector { background:linear-gradient(180deg,#fff,#f7f2f3); box-shadow:inset 0 1px 0 rgba(255,255,255,.8),0 18px 40px rgba(87,28,35,.08); }
+.stage-toolbar, .stage-footer { background:#fff; border-color:var(--line); color:var(--text); }
+.role-switch, .auth-tabs { background:#f7eeee; border-color:var(--line); }
+.role-button.active, .auth-tab.active { color:#fff; background:var(--cyan); box-shadow:0 5px 13px rgba(196,31,53,.22); }
+.quiet-button, .icon-button, .tool-button, .side-tab { color:var(--muted); border-color:var(--line); background:#fff; }
+.quiet-button:hover, .icon-button:hover, .tool-button:hover, .side-tab:hover { color:var(--cyan-strong); border-color:#d79aa2; background:#fff7f7; }
+.tool-button.active { color:#fff; border-color:var(--cyan); background:var(--cyan); }
+.primary-button { color:#fff; border-color:var(--cyan); background:linear-gradient(135deg,#d32942,#a8172c); box-shadow:0 8px 18px rgba(196,31,53,.2); }
+.text-input { color:var(--text); border-color:var(--line); background:#fff; }
+.text-input:focus { outline-color:rgba(196,31,53,.35); border-color:var(--cyan); }
+.section-label, .eyebrow { color:var(--cyan-strong); }
+.asset-row, .inspector-card, .permission-summary { border-color:var(--line); background:rgba(255,255,255,.72); }
+.grid-layer { mix-blend-mode:multiply; }
+.auth-gate { background:radial-gradient(circle at 18% 18%,rgba(196,31,53,.16),transparent 34%),radial-gradient(circle at 86% 82%,rgba(141,19,39,.12),transparent 38%),rgba(247,241,242,.96); backdrop-filter:blur(12px); }
+.auth-card { position:relative; overflow:hidden; width:min(500px,calc(100vw - 30px)); padding:38px 36px 32px; border:1px solid #e2b9be; border-radius:20px; background:#fff; box-shadow:0 30px 90px rgba(104,31,42,.2),inset 0 1px 0 #fff; }
+.auth-card::before { content:""; position:absolute; inset:0 auto 0 0; width:8px; background:linear-gradient(180deg,#e23850,#961328); }
+.auth-mark { border-color:var(--cyan); color:#fff; background:linear-gradient(145deg,#dc3048,#9e1528); box-shadow:0 10px 26px rgba(196,31,53,.25); }
+.auth-card h1 { color:var(--text); font-size:30px; }
+.auth-copy, .form-help { color:var(--muted); }
+.auth-account-summary { border-color:#e6c6ca; color:var(--text); background:#fff5f6; }
