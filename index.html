@@ -223,6 +223,7 @@
                 </div>
                 <img id="mapImage" class="map-image" alt="Mapa da cena" hidden />
                 <div class="grid-layer" id="gridLayer" aria-hidden="true"></div>
+                <div id="visionRangeLayer" class="vision-range-layer" aria-hidden="true"></div>
                 <div class="scene-vignette"></div>
                 <svg id="wallsLayer" class="walls-layer" viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true"></svg>
                 <canvas id="lightingCanvas" class="lighting-canvas" aria-hidden="true"></canvas>
@@ -282,7 +283,7 @@
         <div class="state-editor-heading">
           <div>
             <label class="field-label">Estados visuais</label>
-            <small class="form-help">Cada cartão vira uma tecla de 1 a 9. O primeiro estado é usado como padrão.</small>
+            <small class="form-help">Cada cartão vira uma tecla de 1 a 9. Clique numa miniatura para definir a imagem padrão.</small>
           </div>
           <button class="quiet-button add-state-button" id="addTokenState" type="button">＋ Adicionar</button>
         </div>
@@ -349,6 +350,6 @@
     </dialog>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="app.js?v=15" defer></script>
+    <script src="app.js?v=16" defer></script>
   </body>
 </html>
