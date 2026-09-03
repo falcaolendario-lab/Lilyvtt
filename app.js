@@ -689,11 +689,11 @@ function renderAuthGate() {
   if (!els.authGate) return;
   const isPlayer = launchedAsPlayer;
   const loggedIn = Boolean(authUser);
-  const visible = !isPlayer && authGateVisible;
-  els.authGate.hidden = !visible;
-  els.body.classList.toggle("auth-gate-open", visible);
+  const visible = false;
+  els.authGate.hidden = true;
+  els.body.classList.remove("auth-gate-open");
   if (els.accountButton) {
-    els.accountButton.hidden = isPlayer;
+    els.accountButton.hidden = true;
     els.accountButton.textContent = loggedIn
       ? `Conta · ${authUser.name || authUser.email}`
       : "Entrar como Mestre";
@@ -1142,24 +1142,14 @@ async function initRealtime() {
   }
   if (!onlineServerBase) {
     updateConnectionStatus("offline", "somente local");
-    if (!localMode) openAuthGate("O endereço online ainda não está configurado nesta página.");
     return;
   }
   if (!window.WebSocket) {
     updateConnectionStatus("error", "WebSocket indisponível");
     return;
   }
-  if (!authUser) {
-    const restored = await restoreAuthSession();
-    if (!restored) {
-      updateConnectionStatus("offline", "entre para salvar online");
-      openAuthGate("Entre ou crie uma conta para guardar sua biblioteca e suas cenas.");
-      return;
-    }
-  }
 
   try {
-    if (!accountWorkspaceLoaded) await loadAccountWorkspace();
     let credentials = readOnlineCredentials();
     if (!credentials) credentials = await createOnlineRoom();
     state.room.id = credentials.roomId;
