@@ -32,7 +32,6 @@
         <div class="top-actions">
           <span class="save-indicator" id="saveIndicator"><span class="status-dot"></span> salvo localmente</span>
           <span class="connection-status offline" id="connectionStatus" title="Estado da sala online">somente local</span>
-          <button class="quiet-button gm-only account-button" id="accountButton" type="button" hidden>Entrar como Mestre</button>
           <button class="quiet-button gm-only" id="shareRoom">Compartilhar player</button>
           <div class="role-switch" aria-label="Escolher modo de visualização">
             <button class="role-button active" id="roleGm" data-role-choice="gm">Mestre</button>
@@ -385,35 +384,7 @@
       </div>
     </dialog>
 
-    <section class="auth-gate" id="authGate" hidden aria-labelledby="authTitle">
-      <div class="auth-card">
-        <div class="auth-mark" aria-hidden="true">✦</div>
-        <div class="eyebrow">LILYVTT / MESTRE</div>
-        <h1 id="authTitle">Entre na sua mesa</h1>
-        <p class="auth-copy">Cada conta mantém suas cenas, mapas, tokens e biblioteca separadas. Players entram somente pelo link da sala.</p>
-        <div class="auth-account-summary" id="authAccountSummary" hidden></div>
-        <div class="auth-tabs" role="tablist" aria-label="Acesso do Mestre">
-          <button class="auth-tab active" id="authLoginTab" type="button" role="tab" aria-selected="true">Entrar</button>
-          <button class="auth-tab" id="authSignupTab" type="button" role="tab" aria-selected="false">Criar conta</button>
-        </div>
-        <form id="authForm" class="auth-form" novalidate>
-          <label class="field-label" for="authName" id="authNameLabel" hidden>Nome do Mestre</label>
-          <input class="text-input" id="authName" type="text" maxlength="60" autocomplete="name" placeholder="Como quer aparecer na mesa" hidden />
-          <label class="field-label" for="authEmail">E-mail</label>
-          <input class="text-input" id="authEmail" type="email" maxlength="160" autocomplete="email" placeholder="voce@exemplo.com" required />
-          <label class="field-label" for="authPassword">Senha</label>
-          <input class="text-input" id="authPassword" type="password" minlength="8" autocomplete="current-password" placeholder="Mínimo de 8 caracteres" required />
-          <button class="primary-button full-width auth-submit" id="authSubmit" type="submit">Entrar</button>
-        </form>
-        <div class="auth-actions">
-          <button class="quiet-button full-width" id="continueLocal" type="button">Usar modo local</button>
-          <button class="quiet-button full-width" id="authLogout" type="button" hidden>Sair da conta</button>
-        </div>
-        <p class="auth-message" id="authMessage" role="status" aria-live="polite"></p>
-      </div>
-    </section>
-
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="app.js?v=21" defer></script>
+    <script src="app.js?v=22" defer></script>
   </body>
 </html>
