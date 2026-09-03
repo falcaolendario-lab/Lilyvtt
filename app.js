@@ -164,6 +164,10 @@ let realtime = {
   memberId: PLAYER_ID,
   reconnectTimer: null,
   applyingRemote: false,
+  pollTimer: null,
+  snapshotRequestInFlight: false,
+  hasSnapshot: false,
+  lastServerUpdateAt: "",
 };
 let onlineStateTimer = null;
 let editingBlueprintId = null;
@@ -763,7 +767,9 @@ function closeAuthGate() {
 
 function stopRealtimeConnection() {
   window.clearTimeout(realtime.reconnectTimer);
+  window.clearInterval(realtime.pollTimer);
   realtime.reconnectTimer = null;
+  realtime.pollTimer = null;
   realtime.shouldReconnect = false;
   if (realtime.socket && realtime.socket.readyState < 2) realtime.socket.close();
   realtime.socket = null;
@@ -1023,24 +1029,49 @@ function scheduleRealtimeState() {
 }
 
 async function loadOnlineRoomState(roomId) {
-  if (!onlineServerBase || !roomId || !launchedAsPlayer) return;
+  if (!onlineServerBase || !roomId || !launchedAsPlayer || realtime.snapshotRequestInFlight) return;
+  realtime.snapshotRequestInFlight = true;
   try {
     const response = await apiRequest("/api/rooms/" + encodeURIComponent(roomId));
     const payload = await responsePayload(response);
     if (!response.ok || !payload?.state) {
       throw new Error(payload?.error || "Não foi possível carregar a sala online.");
     }
-    // Se o WebSocket já entregou o estado, ele é a fonte mais recente.
-    if (realtime.connected) return;
+    const remoteUpdatedAt = String(payload.updatedAt || "");
+    const previousTime = Date.parse(realtime.lastServerUpdateAt);
+    const remoteTime = Date.parse(remoteUpdatedAt);
+    if (
+      remoteUpdatedAt &&
+      remoteUpdatedAt === realtime.lastServerUpdateAt
+    ) return;
+    if (
+      Number.isFinite(previousTime) &&
+      Number.isFinite(remoteTime) &&
+      remoteTime < previousTime
+    ) return;
+    realtime.lastServerUpdateAt = remoteUpdatedAt || realtime.lastServerUpdateAt;
+    realtime.hasSnapshot = true;
     applyRemoteState(payload.state);
-    updateConnectionStatus("connecting", "snapshot carregado · aguardando tempo real");
-  } catch (error) {
-    console.warn("Não foi possível carregar o estado inicial da sala online.", error);
     if (!realtime.connected) {
+      updateConnectionStatus("connecting", "estado carregado · aguardando tempo real");
+    }
+  } catch (error) {
+    console.warn("Não foi possível carregar o estado da sala online.", error);
+    if (!realtime.connected && !realtime.hasSnapshot) {
       updateConnectionStatus("error", "sala indisponível");
       showToast(error.message || "Não foi possível carregar a sala do Player.", true);
     }
+  } finally {
+    realtime.snapshotRequestInFlight = false;
   }
+}
+
+function startOnlineStatePolling(roomId) {
+  if (!launchedAsPlayer || !roomId) return;
+  window.clearInterval(realtime.pollTimer);
+  realtime.pollTimer = window.setInterval(() => {
+    loadOnlineRoomState(roomId);
+  }, 1500);
 }
 
 function applyRemoteState(incomingState) {
@@ -1067,6 +1098,8 @@ function handleRealtimeMessage(message) {
   if (!message || typeof message !== "object") return;
   if (message.type === "state") {
     if (message.roomId) realtime.roomId = String(message.roomId);
+    if (message.updatedAt) realtime.lastServerUpdateAt = String(message.updatedAt);
+    realtime.hasSnapshot = true;
     applyRemoteState(message.state);
     return;
   }
@@ -1160,6 +1193,7 @@ async function initRealtime() {
     }
     connectRealtime(requestedRoomId, "player");
     loadOnlineRoomState(requestedRoomId);
+    startOnlineStatePolling(requestedRoomId);
     return;
   }
   if (!onlineServerBase) {
