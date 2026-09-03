@@ -1022,6 +1022,27 @@ function scheduleRealtimeState() {
   }, 90);
 }
 
+async function loadOnlineRoomState(roomId) {
+  if (!onlineServerBase || !roomId || !launchedAsPlayer) return;
+  try {
+    const response = await apiRequest("/api/rooms/" + encodeURIComponent(roomId));
+    const payload = await responsePayload(response);
+    if (!response.ok || !payload?.state) {
+      throw new Error(payload?.error || "Não foi possível carregar a sala online.");
+    }
+    // Se o WebSocket já entregou o estado, ele é a fonte mais recente.
+    if (realtime.connected) return;
+    applyRemoteState(payload.state);
+    updateConnectionStatus("connecting", "snapshot carregado · aguardando tempo real");
+  } catch (error) {
+    console.warn("Não foi possível carregar o estado inicial da sala online.", error);
+    if (!realtime.connected) {
+      updateConnectionStatus("error", "sala indisponível");
+      showToast(error.message || "Não foi possível carregar a sala do Player.", true);
+    }
+  }
+}
+
 function applyRemoteState(incomingState) {
   if (!incomingState || typeof incomingState !== "object") return;
   const localUi = state.ui;
@@ -1138,6 +1159,7 @@ async function initRealtime() {
       return;
     }
     connectRealtime(requestedRoomId, "player");
+    loadOnlineRoomState(requestedRoomId);
     return;
   }
   if (!onlineServerBase) {
@@ -3867,7 +3889,11 @@ function renameRoom() {
 
 async function shareRoom() {
   if (currentRole() !== "gm") return;
-  const roomId = realtime.roomId || readOnlineCredentials()?.roomId || state.room.id;
+  const roomId = realtime.roomId || readOnlineCredentials()?.roomId || "";
+  if (!roomId) {
+    showToast("A sala online ainda não foi criada. Aguarde a conexão antes de compartilhar.", true);
+    return;
+  }
   const base = `${window.location.origin}${window.location.pathname}`;
   const params = new URLSearchParams({ room: roomId, mode: "player" });
   if (onlineServerBase && onlineServerBase !== window.location.origin) params.set("server", onlineServerBase);
