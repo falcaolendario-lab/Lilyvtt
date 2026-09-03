@@ -149,7 +149,7 @@ const requestedServerUrl = queryParams.get("server") || "";
 const pageServerUrl = document.querySelector('meta[name="lily-server-url"]')?.content || "";
 const serverHint = requestedServerUrl || window.LILY_SERVER_URL || pageServerUrl;
 const isGithubPages = /\.github\.io$/i.test(window.location.hostname);
-const onlineServerBase = normalizeServerBase(serverHint || (!isGithubPages ? window.location.origin : DEFAULT_ONLINE_SERVER_URL));
+const onlineServerBase = normalizeServerBase(serverHint) || normalizeServerBase(!isGithubPages ? window.location.origin : DEFAULT_ONLINE_SERVER_URL);
 const initialRole = launchedAsPlayer ? "player" : "gm";
 let stateStorageKey = STORAGE_KEY;
 let state = loadState();
@@ -651,11 +651,21 @@ function apiRequest(path, options = {}) {
   const headers = new Headers(options.headers || {});
   if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   if (authSessionToken) headers.set("Authorization", `Bearer ${authSessionToken}`);
-  return fetch(`${onlineServerBase}${path}`, {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 15000);
+  const requestOptions = {
     ...options,
     headers,
     credentials: "include",
-  });
+    signal: options.signal || controller.signal,
+  };
+  return fetch(`${onlineServerBase}${path}`, requestOptions)
+    .catch((error) => {
+      if (error?.name === "AbortError") throw new Error("O servidor online demorou para responder. Tente novamente.");
+      if (error instanceof TypeError) throw new Error("Não foi possível conectar ao servidor online. Confira sua conexão e tente novamente.");
+      throw error;
+    })
+    .finally(() => window.clearTimeout(timeoutId));
 }
 
 async function responsePayload(response) {
@@ -697,7 +707,11 @@ function renderAuthGate() {
       ? `<strong>${escapeHtml(authUser.name || "Mestre")}</strong><small>${escapeHtml(authUser.email || "")} · biblioteca isolada nesta conta</small>`
       : "";
   }
-  [els.authLoginTab, els.authSignupTab].forEach((tab) => { if (tab) tab.hidden = loggedIn; });
+  [els.authLoginTab, els.authSignupTab].forEach((tab) => {
+    if (!tab) return;
+    tab.hidden = loggedIn;
+    tab.disabled = loggedIn || authBusy;
+  });
   const formHidden = loggedIn;
   if (els.authForm) els.authForm.hidden = formHidden;
   if (els.authNameLabel) els.authNameLabel.hidden = loggedIn || authMode !== "signup";
