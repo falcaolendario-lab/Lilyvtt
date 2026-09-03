@@ -4167,28 +4167,6 @@ function init() {
   document.addEventListener("click", handleDelegatedClick);
   document.addEventListener("keydown", handleKeydown);
   document.addEventListener("keyup", handleKeyup);
-  els.authLoginTab.addEventListener("click", () => {
-    if (authBusy) return;
-    authMode = "login";
-    setAuthMessage("");
-    renderAuthGate();
-  });
-  els.authSignupTab.addEventListener("click", () => {
-    if (authBusy) return;
-    authMode = "signup";
-    setAuthMessage("");
-    renderAuthGate();
-  });
-  els.authForm.addEventListener("submit", handleAuthSubmit);
-  els.continueLocal.addEventListener("click", () => {
-    if (authUser) closeAuthGate();
-    else enterLocalMode();
-  });
-  els.authLogout.addEventListener("click", logoutAccount);
-  els.accountButton.addEventListener("click", () => {
-    if (authUser) setAuthMessage("");
-    openAuthGate();
-  });
   els.mapImage.addEventListener("load", renderLighting);
   window.addEventListener("resize", () => {
     renderGrid();
