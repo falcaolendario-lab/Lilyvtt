@@ -14,6 +14,7 @@ const AUTH_SESSION_KEY = "lilyvtt-auth-session-v1";
 const STATE_SCHEMA_VERSION = 8;
 const PLAYER_ID = "player-1";
 const DEFAULT_LIGHT_COLOR = "#f4c783";
+const DEFAULT_ONLINE_SERVER_URL = "https://lilyvtt.falcaolendario.chatgpt.site";
 const MAX_TOKEN_ANIMATION_FRAMES = 12;
 const TOKEN_ANIMATION_FRAME_MS = 560;
 const TOKEN_ACTION_ANIMATION_FRAME_MS = 120;
@@ -148,7 +149,7 @@ const requestedServerUrl = queryParams.get("server") || "";
 const pageServerUrl = document.querySelector('meta[name="lily-server-url"]')?.content || "";
 const serverHint = requestedServerUrl || window.LILY_SERVER_URL || pageServerUrl;
 const isGithubPages = /\.github\.io$/i.test(window.location.hostname);
-const onlineServerBase = normalizeServerBase(serverHint || (!isGithubPages ? window.location.origin : ""));
+const onlineServerBase = normalizeServerBase(serverHint || (!isGithubPages ? window.location.origin : DEFAULT_ONLINE_SERVER_URL));
 const initialRole = launchedAsPlayer ? "player" : "gm";
 let stateStorageKey = STORAGE_KEY;
 let state = loadState();
@@ -846,15 +847,36 @@ async function handleAuthSubmit(event) {
     renderAuthGate();
     return;
   }
+  const name = els.authName?.value?.trim() || "";
+  const email = els.authEmail?.value?.trim() || "";
+  const password = els.authPassword?.value || "";
+  if (authMode === "signup" && !name) {
+    setAuthMessage("Digite o nome do Mestre para criar a conta.", true);
+    renderAuthGate();
+    els.authName?.focus();
+    return;
+  }
+  if (!email || !els.authEmail?.checkValidity?.()) {
+    setAuthMessage("Digite um e-mail válido para continuar.", true);
+    renderAuthGate();
+    els.authEmail?.focus();
+    return;
+  }
+  if (password.length < 8) {
+    setAuthMessage("A senha precisa ter pelo menos 8 caracteres.", true);
+    renderAuthGate();
+    els.authPassword?.focus();
+    return;
+  }
   authBusy = true;
   setAuthMessage(authMode === "signup" ? "Criando sua conta…" : "Entrando…");
   renderAuthGate();
   try {
     const endpoint = authMode === "signup" ? "/api/auth/signup" : "/api/auth/login";
     const body = {
-      name: els.authName?.value?.trim(),
-      email: els.authEmail?.value?.trim(),
-      password: els.authPassword?.value || "",
+      name,
+      email,
+      password,
     };
     const response = await apiRequest(endpoint, { method: "POST", body: JSON.stringify(body) });
     const payload = await responsePayload(response);
