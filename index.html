@@ -396,7 +396,7 @@
           <button class="auth-tab active" id="authLoginTab" type="button" role="tab" aria-selected="true">Entrar</button>
           <button class="auth-tab" id="authSignupTab" type="button" role="tab" aria-selected="false">Criar conta</button>
         </div>
-        <form id="authForm" class="auth-form">
+        <form id="authForm" class="auth-form" novalidate>
           <label class="field-label" for="authName" id="authNameLabel" hidden>Nome do Mestre</label>
           <input class="text-input" id="authName" type="text" maxlength="60" autocomplete="name" placeholder="Como quer aparecer na mesa" hidden />
           <label class="field-label" for="authEmail">E-mail</label>
@@ -414,6 +414,6 @@
     </section>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="app.js?v=18" defer></script>
+    <script src="app.js?v=19" defer></script>
   </body>
 </html>
