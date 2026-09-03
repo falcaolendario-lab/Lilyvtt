@@ -1850,7 +1850,9 @@ function renderCanvasObjects() {
   els.darknessLayer.innerHTML = scene.darknessZones.map((zone) => `
     <div class="darkness-zone ${state.ui.selectedDarknessId === zone.id ? "selected" : ""}" data-darkness-id="${escapeHtml(zone.id)}" style="left:${zone.x * 100}%;top:${zone.y * 100}%;width:${zone.width * 100}%;height:${zone.height * 100}%;--darkness-opacity:${zone.opacity}" title="Área escura · arraste para mover" role="button" tabindex="0" aria-label="Área escura"></div>`).join("");
 
-  els.lightsLayer.innerHTML = currentRole() === "gm"
+  const showLightMarkers = currentRole() === "gm";
+  els.lightsLayer.hidden = !showLightMarkers;
+  els.lightsLayer.innerHTML = showLightMarkers
     ? scene.lights.map((light) => `
       <button class="light-marker ${state.ui.selectedLightId === light.id ? "selected" : ""}" data-light-id="${escapeHtml(light.id)}" style="left:${light.x * 100}%;top:${light.y * 100}%;--light-color:${escapeHtml(normalizeHexColor(light.color))}" title="Luz ${escapeHtml(normalizeHexColor(light.color))} · arraste para mover" aria-label="Luz ${escapeHtml(normalizeHexColor(light.color))}, arraste para mover"><span>✦</span></button>`).join("")
     : "";
