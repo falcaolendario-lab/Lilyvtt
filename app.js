@@ -660,7 +660,9 @@ function apiRequest(path, options = {}) {
   const requestOptions = {
     ...options,
     headers,
-    // O GitHub Pages usa o servidor online em outra origem. Como o beta não depende de cookies,\n    // não envie credenciais de navegador: isso permite CORS com Access-Control-Allow-Origin: *.\n    credentials: "omit",
+    // O GitHub Pages usa o servidor online em outra origem. Como o beta não depende de cookies,
+    // não envie credenciais de navegador: isso permite CORS com Access-Control-Allow-Origin: *.
+    credentials: "omit",
     signal: options.signal || controller.signal,
   };
   return fetch(`${onlineServerBase}${path}`, requestOptions)
